@@ -1,0 +1,58 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: sheba_insurance_screen
+display_name: Sheba — screenshot of 'קשרי ביטוח - סקירה' (insurance relations overview, patient admission system)
+certainty: certain
+seen_in: part 1 p. 2,3,4,7,11,25; part 2 p. 20,21,22
+detect:
+  keywords:
+  - קשרי ביטוח - סקירה
+  - נתוני ביקור
+  - גורם מפנה
+  - מספר התחייבות
+  - שם מבטח
+  - ביק.ראש.
+  logo_hint: No logo; system screenshot (buttons 'נתוני FI', 'נתוני MI')
+fields:
+  first_name:
+    labels: []
+    hint: 'Top row: date of birth, ID number and name together; also in the insured person''s row in the table. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.'
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels: []
+    hint: Same place.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels: []
+    hint: On the top row after the date of birth; sometimes repeated in the insured person's row in the table.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: '6-digit barcode sticker with the word ''מרכזי'' printed next to it (usually highlighted in yellow); there may be several stickers. Without a sticker: the central number is handwritten (sometimes with ''מספר מרכזי'') on the left, with a date below or after it.'
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number. No stamp — the date is handwritten next to the central number, in formats like 16/6/26, 7/6/26 or '-31.8'.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - שם מבטח
+    - גורם מפנה
+    hint: The 'שם מבטח' (insurer name) column in the insurance table (e.g. 'קופ"ח מאוחדת', 'מכבי שרותי בריאות', 'משרד הבטחון', 'הרשות הפלסטינאית', 'תיירות מרפא'); 'גורם מפנה' = code + short name. May also be 'ללא קופ"ח'.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מספר התחייבות
+    hint: The 'מספר התחייבות' column in the table — one row per insurer; 1–3 rows. The insured person's own row (31.12.9999) has no number.
+    multiple: true
+    handwritten_possible: false
+pages:
+  typical: 1

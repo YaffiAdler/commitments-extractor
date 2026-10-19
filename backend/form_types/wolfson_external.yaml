@@ -1,0 +1,57 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: wolfson_external
+display_name: Wolfson — commitment form for ordering external tests
+certainty: certain
+seen_in: part 2 p. 12, 13
+detect:
+  keywords:
+  - ע"ש אדית וולפסון
+  - טופס התחייבות להזמנת בדיקות חוץ
+  - מס'
+  logo_hint: Black square/circle logo + 'המרכז הרפואי האוניברסיטאי ע"ש אדית וולפסון'
+fields:
+  first_name:
+    labels:
+    - 'שם:'
+    hint: Hospital admission sticker. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - 'שם:'
+    hint: Hospital admission sticker.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - מ.ז.
+    hint: Hospital admission sticker.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers. There may be several central stickers (one per test row).
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - וולפסון
+    hint: The hospital; the sticker shows 'קופ"ח' (also 'ללא קופ"ח').
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מס'
+    hint: '''מס'' <5 digits>'' printed to the left of the title (may be hidden by a BIOHAZARD stamp). A vertical 7-digit sticker at the bottom — uncertain whether it is a commitment number.'
+    multiple: true
+    handwritten_possible: false
+pages:
+  typical: 1

@@ -1,0 +1,57 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: barzilai_letter
+display_name: Barzilai — 'לכבוד' letter with a handwritten commitment number
+certainty: certain
+seen_in: part 2 p. 6, 7
+detect:
+  keywords:
+  - ברזילי
+  - מס' התחייבות
+  - נא לצרף את טופס ההתחייבות לחשבון
+  logo_hint: Logo 'ברזילי' at top center; dotted print (fax)
+fields:
+  first_name:
+    labels:
+    - 'שם:'
+    hint: Hospital admission sticker. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - 'שם:'
+    hint: Sticker.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - מ.ז.
+    hint: Sticker.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number. There is also a handwritten date below the central sticker (different from the stamp date!).
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - ברזילי
+    hint: The hospital; the sticker shows 'קופ"ח'.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מס' התחייבות
+    hint: Handwritten (5 digits), sometimes with a strike-through/correction.
+    multiple: false
+    handwritten_possible: true
+pages:
+  typical: 1

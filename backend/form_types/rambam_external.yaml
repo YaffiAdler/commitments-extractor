@@ -1,0 +1,58 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: rambam_external
+display_name: Rambam — form for sending a test to external parties (financial commitment)
+certainty: certain
+seen_in: part 1 p. 15, 16, 19
+detect:
+  keywords:
+  - רמב"ם
+  - טופס לשליחת בדיקה לגורמי חוץ
+  - מספר הדגימה מהווה מספר התחייבות
+  - מספר דגימה
+  logo_hint: Tree logo + 'רמב"ם הקריה הרפואית לבריאות האדם'
+fields:
+  first_name:
+    labels:
+    - 'שם הנבדק:'
+    hint: In the 'פרטי הנבדק' section. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - 'שם הנבדק:'
+    hint: Same field.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - 'תעודת זהות:'
+    hint: Also on the bottom sticker.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number. In the faxed version the received date is handwritten below a handwritten central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - רמב"ם
+    hint: 'The hospital; the admission sticker also shows the HMO (e.g. ''קופ"ח: כללית'').'
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - 'מספר דגימה:'
+    hint: 9 digits; also a sticker '944 000351 2026' — same number. The form states that the sample number is the commitment number.
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

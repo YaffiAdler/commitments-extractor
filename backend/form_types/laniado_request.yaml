@@ -1,0 +1,56 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: laniado_request
+display_name: Laniado — 'חסוי לאחר מילוי' (confidential once filled) lab form
+certainty: uncertain
+seen_in: part 2 p. 14, 15
+detect:
+  keywords:
+  - לניאדו
+  - חסוי לאחר מילוי
+  - בדיקות דחופות למעבדה
+  logo_hint: '''לניאדו'' logo (triangle)'
+fields:
+  first_name:
+    labels:
+    - שם
+    hint: Small sticker. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - משפחה
+    hint: ''
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ת.ז.
+    hint: ''
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers. The scan is rotated 90°.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - לניאדו
+    hint: The hospital; the sticker shows the HMO (Leumit/Clalit).
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels: []
+    hint: Sticker 'X' + 6 digits — uncertain whether it is a commitment number.
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

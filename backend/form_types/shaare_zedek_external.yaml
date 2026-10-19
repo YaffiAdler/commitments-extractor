@@ -1,0 +1,61 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: shaare_zedek_external
+display_name: Shaare Zedek — request for a lab test outside the medical center + commitment
+certainty: certain
+seen_in: part 1 p. 13
+detect:
+  keywords:
+  - המרכז הרפואי שערי צדק
+  - בקשה לבדיקת מעבדה מחוץ למרכז הרפואי
+  - מספר התחייבות
+  - מספר בקשה
+  logo_hint: Stylized Magen David logo on the right; 'SHAARE ZEDEK'
+fields:
+  first_name:
+    labels:
+    - 'שם פרטי :'
+    hint: In the 'פרטי המטופל/ת' section. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - 'שם משפחה :'
+    hint: On the same row.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - 'מספר זהות :'
+    - מ.ז.
+    hint: '''מספר זהות'', and also on the admission sticker on the left.'
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number. No 'התקבל' stamp was found in the sample; the bold date is the commitment date — not the received date.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - המרכז הרפואי שערי צדק מתחייב
+    hint: The hospital (the form's 'קופת חולים' field is empty).
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - 'מספר התחייבות :'
+    - התחייבות המרכז הרפואי מספר
+    - 'מספר בקשה :'
+    hint: Appears 3 times — same number (6 digits).
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

@@ -1,0 +1,58 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: meuhedet_form17
+display_name: Meuhedet — commitment to pay for health services
+certainty: certain
+seen_in: part 1 p. 1
+detect:
+  keywords:
+  - מאוחדת
+  - התחייבות לתשלום עבור שירותי בריאות
+  - התחייבות מספר
+  - meuhedet
+  logo_hint: '''מאוחדת'' logo with a black circle, top right corner'
+fields:
+  first_name:
+    labels:
+    - שם
+    hint: In the 'פרטי המבוטח/ת' table, the 'שם' row (a single full name). In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - שם
+    hint: Same 'שם' field — must be split into first and last name.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ת"ז
+    hint: In the 'פרטי המבוטח/ת' table, above the name.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - מאוחדת
+    hint: The HMO itself (logo). 'נותן השירות' (service provider) in the top box is not the sender.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - התחייבות מספר
+    hint: 'Below the title: ''התחייבות מספר'' + 9 digits. The 10-digit barcode on the right is not the commitment number.'
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

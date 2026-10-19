@@ -1,0 +1,57 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: hillel_yaffe_lab
+display_name: Hillel Yaffe — lab form (bacteriology test)
+certainty: uncertain
+seen_in: part 2 p. 8, 9
+detect:
+  keywords:
+  - הלל יפה
+  - בית החולים הממשלתי
+  - מעבדה
+  - נא לחייב חשבוננו
+  logo_hint: Round logo 'המרכז הרפואי הלל יפה' on the left
+fields:
+  first_name:
+    labels:
+    - שם החולה
+    hint: Hospital admission sticker. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - שם החולה
+    hint: ''
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - מ.ז.
+    hint: Sticker.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number. One sample has no stamp — handwritten date below the central sticker.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - הלל יפה
+    hint: The hospital.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels: []
+    hint: No field; barcode sticker in the format '2648 00879' — uncertain whether this is the commitment number.
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

@@ -1,0 +1,59 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: idf_meditik
+display_name: IDF Medical Corps — budget reference (MediTik)
+certainty: certain
+seen_in: part 1 p. 20
+detect:
+  keywords:
+  - צה"ל חיל הרפואה
+  - MediTik
+  - אסמכתא תקציבית מספר
+  - מספר הפניה
+  logo_hint: Medical Corps emblem at top right
+fields:
+  first_name:
+    labels:
+    - שם מלא
+    hint: The 'פרטי המטופל' table. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - שם מלא
+    hint: Same field.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ת.ז
+    hint: The 'פרטי המטופל' table.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number. In the sample the 'התקבל' stamp is almost invisible — only the (bold) date is readable.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - צה"ל
+    hint: IDF Medical Corps.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - אסמכתא תקציבית מספר
+    - אסמכתא
+    hint: 9 digits, appears 3–4 times. 'מספר הפניה' (referral number, 8 digits) is a different number — do not confuse them.
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

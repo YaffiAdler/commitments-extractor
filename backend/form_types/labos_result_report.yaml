@@ -1,0 +1,60 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: labos_result_report
+display_name: LabOS results report from a hospital lab (Clalit / Carmel Medical Center)
+certainty: certain
+seen_in: part 1 p. 6, 12
+detect:
+  keywords:
+  - דוח תוצאות
+  - LabOS
+  - מס' הדגימה
+  - תוצאות חלקיות
+  - גורם שולח
+  logo_hint: '''כללית'' logo on the left; lab/hospital logo on the right; ClabOS footer'
+fields:
+  first_name:
+    labels:
+    - 'שם פרטי:'
+    hint: In the framed header row. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - 'שם משפחה:'
+    hint: In the framed header row.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ת.ז.
+    hint: In the header row.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: 'Rectangular ''התקבל'' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number. At Carmel: no stamp, only a handwritten date inside a frame.'
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - 'גורם שולח:'
+    hint: '''גורם שולח:'' = code + department + <hospital>. The paying HMO is Clalit (logo).'
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מס' הדגימה
+    - מעבדה מס'
+    hint: '''מס'' הדגימה'' (= the number in the header). The Clalit central lab has a stamp ''מס'' הדגימה משמש גם כמס'' אסמכתא להתחייבות'' (the sample number also serves as the commitment reference); at Carmel: ''טופס זה מהווה התחייבות כספית'' (this form constitutes a financial commitment).'
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

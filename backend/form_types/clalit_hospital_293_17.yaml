@@ -1,0 +1,59 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: clalit_hospital_293_17
+display_name: Clalit — request for a lab test outside the hospital (form 293/17)
+certainty: certain
+seen_in: part 2 p. 10, 11
+detect:
+  keywords:
+  - בקשה לבדיקת מעבדה מחוץ לבית החולים
+  - 293/17
+  - מספר ההתחייבות
+  - כללית
+  logo_hint: Logo 'כללית' at top right; fields with numbered boxes (34–40 etc.)
+fields:
+  first_name:
+    labels:
+    - שם החולה
+    - פרטי
+    hint: The 'שם החולה' row with numbered boxes. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - שם החולה
+    hint: Same row.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - מספר הזיהוי
+    hint: Same row (fields 34–40).
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - בית החולים
+    hint: Hospital name is handwritten; stamp 'מרכז רפואי רבין'. The HMO is Clalit.
+    multiple: false
+    handwritten_possible: true
+  commitment_numbers:
+    labels:
+    - מספר ההתחייבות
+    hint: Numbered box 51–54 — empty in the samples; the number (9 digits) is handwritten in the 'האבחנה המשוערת' (presumed diagnosis) field!
+    multiple: false
+    handwritten_possible: true
+pages:
+  typical: 1

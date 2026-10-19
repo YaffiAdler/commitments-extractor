@@ -1,0 +1,59 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: shamir_external
+display_name: Shamir (Assaf Harofeh) — commitment form for an external test
+certainty: certain
+seen_in: part 1 p. 26; part 2 p. 1
+detect:
+  keywords:
+  - המרכז הרפואי שמיר
+  - אסף הרופא
+  - טופס התחייבות לבדיקת חוץ
+  - מספר התחייבות
+  logo_hint: '''המרכז הרפואי שמיר'' logo on the right; ISO logo on the left'
+fields:
+  first_name:
+    labels:
+    - שם
+    hint: Hospital admission sticker. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - שם
+    hint: Hospital admission sticker.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ת.ז.
+    - מ.ז.
+    hint: Hospital admission sticker.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - שמיר
+    hint: 'The hospital; the sticker shows ''קופ"ח: מאוחדת'' etc.'
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מספר התחייבות
+    hint: Box on the left with a short printed number (4 digits) above a barcode.
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

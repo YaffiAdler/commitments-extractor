@@ -1,0 +1,58 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: leumit_lab_worklist
+display_name: Leumit — 'דוח רשימת עבודה לפי בדיקה' (worklist report by test, LabOS)
+certainty: certain
+seen_in: part 1 p. 8
+detect:
+  keywords:
+  - דוח רשימת עבודה לפי בדיקה
+  - 'דגימה:'
+  - לאומית שירותי בריאות
+  - מעבדה מרכזית
+  logo_hint: '''לאומית'' logo at top left (partly covered by a sticker)'
+fields:
+  first_name:
+    labels:
+    - 'שם ומשפחה:'
+    hint: A single field 'שם ומשפחה:' (full name). In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - 'שם ומשפחה:'
+    hint: Same field.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - 'ת.ז.:'
+    hint: Above a barcode.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - לאומית
+    hint: Stamp 'לאומית שירותי בריאות מעבדה מרכזית'. The form's 'גורם שולח' is a clinic, not the HMO.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - 'דגימה:'
+    hint: The 'דגימה:' number (9 digits) above a barcode — this is the commitment number at Leumit.
+    multiple: true
+    handwritten_possible: false
+pages:
+  typical: 1

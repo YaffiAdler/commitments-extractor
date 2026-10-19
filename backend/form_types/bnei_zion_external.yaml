@@ -1,0 +1,58 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: bnei_zion_external
+display_name: Bnei Zion — form for sending lab tests to an external institution
+certainty: certain
+seen_in: part 2 p. 4, 5
+detect:
+  keywords:
+  - בני ציון
+  - טופס לשליחת בדיקות מעבדה לביצוע במוסד חוץ
+  - מסמך זה מהווה התחייבות כספית
+  logo_hint: Logo 'המרכז הרפואי בני ציון' on the right
+fields:
+  first_name:
+    labels:
+    - 'שם:'
+    - 'שם פרטי:'
+    hint: Hospital admission sticker (large or small). In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - 'שם משפחה:'
+    hint: Sticker.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - מ.ז.
+    - 'ת.ז.:'
+    hint: Sticker.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number. In one sample the handwritten date is inside a faded stamp.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - בני ציון
+    hint: 'The hospital; the sticker shows ''קופ"ח: מכבי''.'
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels: []
+    hint: 'No labeled field. A 6-digit number printed above a barcode — assumption: this is the form/commitment number. Uncertain.'
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

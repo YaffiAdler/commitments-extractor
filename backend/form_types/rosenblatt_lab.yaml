@@ -1,0 +1,59 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: rosenblatt_lab
+display_name: Rosenblatt Medical Lab — referral/commitment for tests
+certainty: uncertain
+seen_in: part 1 p. 17, 18, 21
+detect:
+  keywords:
+  - רוזנבלט מעבדה רפואית
+  - הפניה/ התחייבות לבדיקות
+  - ROSENBLATT MEDICAL LAB
+  - נא חייבו חשבוננו אצלכם
+  logo_hint: Text header 'רוזנבלט מעבדה רפואית בע"מ'
+fields:
+  first_name:
+    labels:
+    - שם
+    hint: The field is empty; the name is on the 'ROSENBLATT MEDICAL LAB' sticker. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - שם
+    hint: Sticker.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ID / PASS
+    - ת. זהות
+    hint: Sticker.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number. The 'התקבל' stamp is very faded; sometimes there is only a handwritten date.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - רוזנבלט
+    hint: Private lab — neither an HMO nor a hospital; uncertain whether it belongs in the closed list.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מס' הקליטה
+    hint: No explicit commitment number. The sticker has a 4-digit number — possibly 'מס' קליטה' (intake number). Uncertain.
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

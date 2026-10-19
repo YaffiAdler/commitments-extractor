@@ -1,0 +1,57 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: meir_external
+display_name: Meir (Clalit) — request for a lab test outside the hospital (81054)
+certainty: certain
+seen_in: part 2 p. 16, 17
+detect:
+  keywords:
+  - מרכז רפואי מאיר
+  - בקשה לבדיקת מעבדה מחוץ לבית החולים
+  - '81054'
+  logo_hint: Logo 'מקבוצת כללית' + 'מרכז רפואי מאיר'
+fields:
+  first_name:
+    labels:
+    - שם החולה
+    hint: The boxes are empty; the name appears only on the sticker at top right. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - שם החולה
+    hint: Sticker.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - מספר הזהות
+    hint: Top sticker.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - מרכז רפואי מאיר
+    hint: The hospital (Clalit group).
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מספר התחייבות
+    hint: Box 51–54 is empty in the samples; a vertical 5-digit barcode sticker on the logo — uncertain whether it is a commitment number.
+    multiple: false
+    handwritten_possible: true
+pages:
+  typical: 1

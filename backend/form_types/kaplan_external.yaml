@@ -1,0 +1,56 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: kaplan_external
+display_name: Kaplan (Clalit) — order for a special lab test outside the hospital
+certainty: uncertain
+seen_in: part 2 p. 18, 19
+detect:
+  keywords:
+  - קפלן
+  - הזמנה לבדיקת מעבדה מיוחדת מחוץ לביה"ח
+  - נא לחייב את חשבון בית החולים
+  logo_hint: Logo 'K' 'המרכז הרפואי קפלן' + 'כללית 100'
+fields:
+  first_name:
+    labels:
+    - שם
+    hint: Hospital admission sticker. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - שם
+    hint: ''
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ת.ז.
+    hint: ''
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - קפלן
+    hint: The hospital; the sticker shows the HMO (Maccabi).
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels: []
+    hint: No field; 8-digit barcode sticker — uncertain.
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

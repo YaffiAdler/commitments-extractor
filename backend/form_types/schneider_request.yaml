@@ -1,0 +1,58 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: schneider_request
+display_name: Schneider (Clalit) — request for lab tests outside the hospital
+certainty: uncertain
+seen_in: part 2 p. 2
+detect:
+  keywords:
+  - מרכז שניידר לרפואת ילדים
+  - בקשה לבדיקות מעבדה מחוץ לבית החולים
+  - מס' ביקור
+  - גורם ממנן
+  logo_hint: Puzzle logo 'שניידר' on the right, 'כללית' on the left
+fields:
+  first_name:
+    labels:
+    - 'שם פרטי:'
+    hint: In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - 'שם משפחה:'
+    hint: ''
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - 'ת. זהות:'
+    hint: ''
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - 'גורם ממנן:'
+    hint: '''גורם ממנן'' (funding party) names an HMO (e.g. Meuhedet) — different from the sending hospital.'
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מס' ביקור
+    hint: No 'מספר התחייבות' field. 'מס' ביקור' (visit number, 10 digits) or the bold number below the barcode — uncertain.
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

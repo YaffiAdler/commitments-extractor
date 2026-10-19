@@ -1,0 +1,61 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: maccabi_online
+display_name: Maccabi — ONLINE commitment
+certainty: certain
+seen_in: part 1 p. 10 (page '1/2'; page 2 not included)
+detect:
+  keywords:
+  - מכבי
+  - maccabi4u
+  - מספר התחייבות
+  - ההתחייבות הופקה דרך מכבי ONLINE
+  logo_hint: '''מכבי'' logo at top right inside a rounded frame'
+fields:
+  first_name:
+    labels:
+    - 'שם:'
+    hint: Top row 'שם:' next to 'ת.ז.'. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - 'שם:'
+    hint: Same field.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ת.ז.
+    - ת.ז. חבר
+    hint: On the top row and also in the 'ת.ז. חבר' barcode in the 'לשימוש המוסד' box.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers. In the sample the central number is handwritten at top left, with a date and the word 'נסרק' (scanned).
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - מכבי
+    hint: The HMO.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מספר התחייבות
+    - 'התחייבות:'
+    - נספח להתחייבות מספר
+    hint: 9 digits; appears 3 times (title, barcode, appendix) — same number, must be deduplicated.
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 2

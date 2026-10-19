@@ -1,0 +1,58 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: clalit_form17
+display_name: Clalit — Form 17 for ambulatory treatment
+certainty: certain
+seen_in: part 1 p. 5
+detect:
+  keywords:
+  - כללית
+  - טופס 17
+  - התחייבות לתשלום עבור שירותי בריאות
+  - לטיפולים אמבולטוריים מספר
+  logo_hint: '''כללית'' logo with an arrows symbol, appears twice (original and copy)'
+fields:
+  first_name:
+    labels:
+    - מטופל
+    hint: The 'מטופל:' row below 'לכבוד'. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - מטופל
+    hint: Same field — full name.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - מטופל
+    hint: ID number on the same row as 'מטופל'. At the bottom there is a 'תעודת זהות' of the person who printed the form — not the patient's!
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - כללית
+    hint: The HMO (logo).
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - לטיפולים אמבולטוריים מספר
+    hint: 'In the title: ''...לטיפולים אמבולטוריים מספר:'' + 9 digits.'
+    multiple: false
+    handwritten_possible: false
+pages:
+  typical: 1

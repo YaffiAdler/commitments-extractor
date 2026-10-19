@@ -1,0 +1,23 @@
+# Patient data - never commit
+samples/
+docs/preprocess_examples/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Env / secrets
+.env
+.env.*
+
+# Outputs
+*.xlsx
+eval/report.md
+predictions.csv

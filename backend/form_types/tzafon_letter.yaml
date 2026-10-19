@@ -1,0 +1,57 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: tzafon_letter
+display_name: 'Tzafon (Poriya) — letter ''הנדון: בדיקה/טיפול התחייבות'''
+certainty: uncertain
+seen_in: part 1 p. 14
+detect:
+  keywords:
+  - צפון
+  - ברוך פדה
+  - 'הנדון: בדיקה/טיפול התחייבות'
+  - נא לחייב את חשבוננו
+  logo_hint: '''צפון'' logo (triangle)'
+fields:
+  first_name:
+    labels:
+    - ע"ש
+    hint: Handwritten. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - ע"ש
+    hint: Handwritten.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ת.ז
+    hint: Handwritten, with strike-throughs.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers. The sample has 2 central stickers. The scan is rotated 90°.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - צפון
+    hint: The hospital.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels: []
+    hint: No commitment number found on the observed form — leave empty and flag.
+    multiple: false
+    handwritten_possible: true
+pages:
+  typical: 1

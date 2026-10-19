@@ -1,0 +1,59 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: forensic_medicine
+display_name: National Center of Forensic Medicine — virology tests
+certainty: uncertain
+seen_in: part 1 p. 24
+detect:
+  keywords:
+  - המרכז הלאומי לרפואה משפטית
+  - National Center of Forensic Medicine
+  - בדיקות וירולוגיות
+  - מס' תיק
+  logo_hint: Ministry of Health emblems on both sides of the title
+fields:
+  first_name:
+    labels:
+    - 'שם פרטי:'
+    hint: In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - 'שם משפחה:'
+    hint: ''
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - 'מס'' זהוי /דרכון:'
+    hint: ''
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers. 2 central stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - משרד הבריאות
+    - רפואה משפטית
+    hint: Government body — uncertain whether it belongs in the closed list.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מס' תיק
+    hint: 'No commitment number; ''מס'' תיק'' (case number: year + number) — uncertain whether it serves as the commitment.'
+    multiple: false
+    handwritten_possible: true
+pages:
+  typical: 1

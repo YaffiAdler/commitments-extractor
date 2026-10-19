@@ -1,0 +1,58 @@
+# Generated from the Phase-0 review of samples/. See docs/form_mapping.md
+id: shmuel_harofe_letter
+display_name: Shmuel Harofe — financial commitment (letter)
+certainty: uncertain
+seen_in: part 1 p. 22, 23
+detect:
+  keywords:
+  - שמואל-הרופא
+  - המרכז הרפואי הגריאטרי
+  - התחייבות כספית
+  - מס' גליון
+  logo_hint: Header 'מדינת ישראל משרד הבריאות'
+fields:
+  first_name:
+    labels:
+    - אצל החולה
+    hint: Handwritten. In the samples the name was replaced with blue handwriting (anonymization); real forms are expected to have it printed.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - אצל החולה
+    hint: Handwritten.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ת.ז.
+    hint: Handwritten.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow); there may be several stickers. The scan is rotated 90°.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number. No 'התקבל' stamp was found; the handwritten date is the letter date.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - שמואל הרופא
+    hint: The hospital.
+    multiple: false
+    handwritten_possible: false
+  commitment_numbers:
+    labels:
+    - מס' גליון
+    hint: The field is empty in both samples — no commitment number found.
+    multiple: false
+    handwritten_possible: true
+pages:
+  typical: 1
