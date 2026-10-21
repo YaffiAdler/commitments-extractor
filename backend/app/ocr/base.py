@@ -17,6 +17,18 @@ class OrientationGuess:
     confidence: float  # engine-specific scale
 
 
+@dataclass(frozen=True)
+class OcrWord:
+    """One recognized word. Holds patient data — never log ``text``."""
+
+    text: str
+    confidence: float  # 0..1
+    left: int
+    top: int
+    width: int
+    height: int
+
+
 @runtime_checkable
 class OcrEngine(Protocol):
     def detect_orientation(self, image: np.ndarray) -> OrientationGuess:
@@ -26,4 +38,9 @@ class OcrEngine(Protocol):
     def text_confidence(self, image: np.ndarray) -> float:
         """How well text reads on this (binarized) image; higher is better.
         Used to compare the four rotations of one page."""
+        ...
+
+    def read_words(self, image: np.ndarray) -> list[OcrWord]:
+        """Every word on a (binarized) page, in reading order, with its box
+        in ``image`` pixels; raises ``OcrError`` if recognition fails."""
         ...

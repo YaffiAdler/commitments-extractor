@@ -7,8 +7,9 @@ from __future__ import annotations
 from datetime import date
 
 from app.pipeline.ingest import PageImage
-from app.schemas import Commitment, Field, FieldSource, FormType
+from app.schemas import Commitment, Field, FieldSource, FormType, PageRelation
 
+FAKE_RELATION_REASON = "fake provider"
 FAKE_FIRST_NAME = "ישראל"
 FAKE_LAST_NAME = "ישראלי"
 FAKE_ID_NUMBER = "000000018"
@@ -48,3 +49,7 @@ class FakeProvider:
 
     def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> str | None:
         return None
+
+    def compare_pages(self, page_a: PageImage, page_b: PageImage) -> PageRelation:
+        """Every page starts its own form (the most common case in the samples)."""
+        return PageRelation(same_form=False, reason=FAKE_RELATION_REASON, page_b_type="start")

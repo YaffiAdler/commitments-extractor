@@ -117,17 +117,60 @@ class Commitment(BaseModel):
         )
 
 
-class FormGroup(BaseModel):
-    """A run of consecutive pages in one uploaded file that form one commitment.
+SPLIT_UNCERTAIN = "split_uncertain"
 
-    Most forms are one page; some (e.g. Maccabi ONLINE "1/2") span two.
+
+class FormGroup(BaseModel):
+    """A run of pages in one uploaded file that form one commitment.
+
+    Most forms are one page; some (e.g. Maccabi ONLINE "1/2") span two. The
+    pages are consecutive except where an irrelevant page was taken out.
+    ``split_confidence`` scores the boundaries of the group; below the review
+    threshold ``split_reasons`` holds ``"split_uncertain"`` (the form may be
+    split wrongly), next to codes for how the boundaries were decided.
     """
 
     id: str = PydField(default_factory=lambda: uuid4().hex)
     source_file: str = PydField(description="stored file name (not the user's original path)")
     pages: list[int] = PydField(min_length=1, description="0-based page indices")
     rotation: int = PydField(default=0, description="clockwise degrees applied before reading")
+    split_confidence: float = PydField(default=1.0, ge=0.0, le=1.0)
+    split_reasons: list[str] = PydField(default_factory=list)
     commitment: Commitment = PydField(default_factory=Commitment)
+
+    @property
+    def needs_review(self) -> bool:
+        return self.commitment.needs_review or SPLIT_UNCERTAIN in self.split_reasons
+
+
+class IrrelevantPage(BaseModel):
+    """A page that belongs to no form. Kept and reported, never dropped silently."""
+
+    source_file: str
+    page: int = PydField(ge=0, description="0-based page index")
+
+
+PageType = Literal["start", "continuation", "irrelevant"]
+
+
+class PageRelation(BaseModel):
+    """A vision model's answer about two adjacent pages A and B.
+
+    ``reason`` is free model text: it may quote the page, so it is never
+    logged or stored.
+    """
+
+    same_form: bool
+    reason: str
+    page_b_type: PageType
+
+
+class Segmentation(BaseModel):
+    """The forms (and the irrelevant pages) found in one file."""
+
+    groups: list[FormGroup]
+    irrelevant_pages: list[IrrelevantPage] = PydField(default_factory=list)
+    vlm_calls: int = PydField(default=0, ge=0, description="page pairs sent to the provider")
 
 
 class JobStatus(str, Enum):
@@ -147,6 +190,8 @@ class Job(BaseModel):
     created_at: datetime = PydField(default_factory=lambda: datetime.now(timezone.utc))
     files: list[str] = PydField(default_factory=list)
     groups: list[FormGroup] = PydField(default_factory=list)
+    irrelevant_pages: list[IrrelevantPage] = PydField(default_factory=list)
+    split_vlm_calls: int = PydField(default=0, ge=0)
     error: Optional[str] = PydField(default=None, description="must not contain field values")
 
 

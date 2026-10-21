@@ -53,6 +53,15 @@ def test_keeps_installed_languages_only(monkeypatch):
     assert captured["lang"] == "eng"
 
 
+def test_read_words_keeps_word_boxes(monkeypatch):
+    data = {"text": ["", " אב ", "12"], "conf": ["-1", "90", "45.5"], "left": [0, 10, 40],
+            "top": [0, 5, 5], "width": [50, 20, 15], "height": [50, 8, 8]}
+    monkeypatch.setattr(pytesseract, "image_to_data", lambda image, lang, output_type, timeout: data)
+    words = TesseractEngine("heb", 5).read_words(IMAGE)
+    assert [(w.text, w.left, w.top) for w in words] == [("אב", 10, 5), ("12", 40, 5)]
+    assert words[1].confidence == pytest.approx(0.455)
+
+
 def test_osd_rotation_is_parsed(monkeypatch):
     monkeypatch.setattr(pytesseract, "image_to_osd",
                         lambda image, config, output_type, timeout: {"rotate": 270, "orientation_conf": 7.5})

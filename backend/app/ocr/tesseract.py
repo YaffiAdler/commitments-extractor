@@ -6,7 +6,7 @@ import numpy as np
 import pytesseract
 from pytesseract import Output
 
-from app.ocr.base import OcrError, OrientationGuess
+from app.ocr.base import OcrError, OcrWord, OrientationGuess
 
 OSD_LANGUAGE = "osd"
 OSD_CONFIG = "--psm 0"
@@ -52,13 +52,27 @@ class TesseractEngine:
 
     def text_confidence(self, image: np.ndarray) -> float:
         """Sum of word confidences (0..1) over words of at least 2 characters."""
-        try:
-            data = pytesseract.image_to_data(image, lang=self._languages, output_type=Output.DICT,
-                                             timeout=self._timeout_s)
-        except (pytesseract.TesseractError, RuntimeError) as exc:
-            raise OcrError("tesseract recognition failed") from exc
+        data = self._image_to_data(image)
         return sum(
             float(conf) / PERCENT
             for text, conf in zip(data["text"], data["conf"])
             if float(conf) > 0 and len(text.strip()) >= MIN_WORD_LENGTH
         )
+
+    def read_words(self, image: np.ndarray) -> list[OcrWord]:
+        """Non-empty word boxes (Tesseract marks non-word boxes with confidence -1)."""
+        data = self._image_to_data(image)
+        return [
+            OcrWord(text=text.strip(), confidence=float(conf) / PERCENT,
+                    left=int(left), top=int(top), width=int(width), height=int(height))
+            for text, conf, left, top, width, height in zip(
+                data["text"], data["conf"], data["left"], data["top"], data["width"], data["height"])
+            if float(conf) >= 0 and text.strip()
+        ]
+
+    def _image_to_data(self, image: np.ndarray) -> dict[str, list]:
+        try:
+            return pytesseract.image_to_data(image, lang=self._languages, output_type=Output.DICT,
+                                             timeout=self._timeout_s)
+        except (pytesseract.TesseractError, RuntimeError) as exc:
+            raise OcrError("tesseract recognition failed") from exc

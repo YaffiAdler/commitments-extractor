@@ -1,7 +1,15 @@
 from openpyxl import load_workbook
 
-from app.export.xlsx import COLUMNS, NEEDS_REVIEW_YES, REVIEW_FILL, write_xlsx
-from app.schemas import Commitment, Field, FormGroup, Job
+from app.export.xlsx import (
+    COLUMNS,
+    EXTRA_HEADERS,
+    IRRELEVANT_SHEET_TITLE,
+    NEEDS_REVIEW_YES,
+    REVIEW_FILL,
+    SPLIT_UNCERTAIN_TEXT,
+    write_xlsx,
+)
+from app.schemas import SPLIT_UNCERTAIN, Commitment, Field, FormGroup, IrrelevantPage, Job
 
 
 def _job(commitment: Commitment) -> Job:
@@ -16,10 +24,24 @@ def test_writes_header_and_row(tmp_path):
     sheet = load_workbook(write_xlsx(_job(commitment), tmp_path / "out.xlsx")).active
     assert sheet.sheet_view.rightToLeft
     rows = list(sheet.iter_rows(values_only=True))
-    assert rows[0][: len(COLUMNS)] == tuple(h for h, _ in COLUMNS)
+    assert rows[0] == tuple(h for h, _ in COLUMNS) + EXTRA_HEADERS
     assert rows[1][2] == "012345678"  # leading zero kept
     assert rows[1][3] == "111111; 222222"
-    assert rows[1][-2:] == ("a.pdf", NEEDS_REVIEW_YES)
+    assert rows[1][len(COLUMNS):] == ("a.pdf", "1", None, NEEDS_REVIEW_YES)
+    assert workbook_sheets(tmp_path / "out.xlsx") == [sheet.title]
+
+
+def workbook_sheets(path):
+    return load_workbook(path).sheetnames
+
+
+def test_uncertain_split_and_irrelevant_pages(tmp_path):
+    group = FormGroup(source_file="a.pdf", pages=[1, 2], split_confidence=0.3, split_reasons=[SPLIT_UNCERTAIN])
+    job = Job(groups=[group], irrelevant_pages=[IrrelevantPage(source_file="a.pdf", page=0)])
+    workbook = load_workbook(write_xlsx(job, tmp_path / "out.xlsx"))
+    row = list(workbook.active.iter_rows(min_row=2, values_only=True))[0]
+    assert row[len(COLUMNS):] == ("a.pdf", "2, 3", SPLIT_UNCERTAIN_TEXT, NEEDS_REVIEW_YES)
+    assert list(workbook[IRRELEVANT_SHEET_TITLE].iter_rows(min_row=2, values_only=True)) == [("a.pdf", 1)]
 
 
 def test_missing_fields_are_empty_and_highlighted(tmp_path):

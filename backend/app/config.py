@@ -19,8 +19,16 @@ class ProviderName(str, Enum):
     """Available extraction providers (see ``app/providers``)."""
 
     CLAUDE = "claude"
+    GEMINI = "gemini"
     LOCAL_VLM = "local_vlm"
     FAKE = "fake"  # fixed dummy data, for tests and offline demos
+
+
+class StorageName(str, Enum):
+    """Available job stores (see ``app/storage``)."""
+
+    SQLITE = "sqlite"  # survives a server restart
+    MEMORY = "memory"  # lost on restart
 
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -79,9 +87,16 @@ class Settings:
     provider: ProviderName = field(default_factory=lambda: ProviderName(_env("provider", ProviderName.CLAUDE.value)))
     claude_model: str = field(default_factory=lambda: _env("claude_model", "claude-opus-5-5"))
     claude_timeout_s: float = field(default_factory=lambda: float(_env("claude_timeout_s", "60")))
+    gemini_model: str = field(default_factory=lambda: _env("gemini_model", "gemini-3.8-flash"))
+    # Gemini thinking models take well over a minute on a full scanned page.
+    gemini_timeout_s: float = field(default_factory=lambda: float(_env("gemini_timeout_s", "180")))
     local_vlm_url: str = field(default_factory=lambda: _env("local_vlm_url", "http://localhost:11434"))
     # A field with confidence below this threshold is flagged for review.
     review_threshold: float = field(default_factory=lambda: float(_env("review_threshold", "0.85")))
+
+    storage: StorageName = field(default_factory=lambda: StorageName(_env("storage", StorageName.SQLITE.value)))
+    # Holds patient data: keep it on a protected disk, never in the repository.
+    db_path: Path = field(default_factory=lambda: Path(_env("db_path", str(BACKEND_DIR / "data" / "app.db"))))
 
     # Jobs and their files are deleted this many seconds after creation.
     job_ttl_s: int = field(default_factory=lambda: int(_env("job_ttl_s", "3600")))
@@ -97,7 +112,7 @@ class Settings:
     def __post_init__(self) -> None:
         if self.render_dpi <= 0:
             raise ValueError("render_dpi must be positive")
-        if self.claude_timeout_s <= 0 or self.ocr_timeout_s <= 0 or self.job_ttl_s <= 0:
+        if self.claude_timeout_s <= 0 or self.gemini_timeout_s <= 0 or self.ocr_timeout_s <= 0 or self.job_ttl_s <= 0:
             raise ValueError("timeouts and TTL must be positive")
         if self.max_upload_mb <= 0 or self.max_pages <= 0:
             raise ValueError("upload and page limits must be positive")

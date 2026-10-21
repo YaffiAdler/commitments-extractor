@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from app.pipeline.ingest import PageImage
-from app.schemas import Commitment, FormType
+from app.schemas import Commitment, FormType, PageRelation
 
 
 class ProviderError(RuntimeError):
@@ -35,4 +35,10 @@ class ExtractionProvider(Protocol):
 
     def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> str | None:
         """Return the id of the matching form type, or None if none matches."""
+        ...
+
+    def compare_pages(self, page_a: PageImage, page_b: PageImage) -> PageRelation:
+        """Say whether page B (right after page A in a file) belongs to the
+        same form as A, and whether B starts a form, continues one or is
+        irrelevant. Used for page pairs the segmentation rules cannot decide."""
         ...

@@ -15,9 +15,19 @@ export interface Commitment {
   commitment_numbers: Field[]
 }
 
+export const SPLIT_UNCERTAIN = 'split_uncertain'
+
 export interface FormGroup {
   id: string
+  pages: number[]
+  split_confidence: number
+  split_reasons: string[]
   commitment: Commitment
+}
+
+export interface IrrelevantPage {
+  source_file: string
+  page: number
 }
 
 export type JobStatus = 'pending' | 'running' | 'done' | 'failed'
@@ -26,6 +36,8 @@ export interface Job {
   id: string
   status: JobStatus
   groups: FormGroup[]
+  irrelevant_pages: IrrelevantPage[]
+  split_vlm_calls: number
   error: string | null
 }
 

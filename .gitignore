@@ -1,5 +1,7 @@
 # Patient data - never commit
 samples/
+*.db
+*.db-journal
 docs/preprocess_examples/
 
 # Python

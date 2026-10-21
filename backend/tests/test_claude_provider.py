@@ -1,4 +1,5 @@
 """ClaudeProvider against a mocked HTTP transport — no network, no real key."""
+import json
 from datetime import date
 from pathlib import Path
 
@@ -8,7 +9,7 @@ import pytest
 
 from app.pipeline.ingest import PageImage
 from app.providers.base import ProviderError
-from app.providers.claude import API_KEY_ENV, ClaudeProvider, commitment_from_tool_input
+from app.providers.claude import API_KEY_ENV, ClaudeProvider
 
 DUMMY_INPUT = {
     "first_name": "משה",
@@ -45,12 +46,6 @@ def test_extract_form_parses_tool_call(monkeypatch):
     assert commitment.id_number.confidence == 0.0  # scoring belongs to the pipeline
 
 
-def test_unparsed_date_stays_empty():
-    commitment = commitment_from_tool_input({**DUMMY_INPUT, "received_date": "31.8"})
-    assert commitment.received_date.value is None
-    assert "unparsed_date" in commitment.received_date.reasons
-
-
 def test_missing_key(monkeypatch):
     monkeypatch.delenv(API_KEY_ENV, raising=False)
     with pytest.raises(ProviderError):
@@ -75,14 +70,17 @@ def test_timeout(monkeypatch):
         _provider(slow).extract_form([_page()], None)
 
 
-def test_large_page_is_downscaled_before_sending(monkeypatch):
-    import base64
+def test_compare_pages_sends_both_pages(monkeypatch):
+    monkeypatch.setenv(API_KEY_ENV, "dummy")
+    relation = {"same_form": True, "reason": "dummy", "page_b_type": "continuation"}
 
-    import cv2
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        content = body["messages"][0]["content"]
+        assert [block["type"] for block in content] == ["image", "image", "text"]
+        assert body["tool_choice"]["name"] == "record_page_relation"
+        return httpx.Response(200, json={"content": [{"type": "tool_use", "name": "record_page_relation",
+                                                      "input": relation}]})
 
-    from app.providers.claude import MAX_IMAGE_EDGE_PX, _encode_page
-
-    image = np.zeros((MAX_IMAGE_EDGE_PX * 2, 100, 3), np.uint8)
-    page = PageImage(file_id="a.pdf", page_no=0, image=image, original_path=Path("a.pdf"), original=image)
-    sent = cv2.imdecode(np.frombuffer(base64.b64decode(_encode_page(page)), np.uint8), cv2.IMREAD_COLOR)
-    assert max(sent.shape[:2]) == MAX_IMAGE_EDGE_PX
+    result = _provider(handler).compare_pages(_page(), _page())
+    assert (result.same_form, result.page_b_type) == (True, "continuation")

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-An engine that reads commitment forms received by the Central Virology Laboratory (scanned PDFs, Hebrew), extracts fields, flags anything uncertain, and exports to Excel. **Currently Phase 2:** upload (PDF or image) -> `ingest` -> `preprocess` -> `extract` (provider) -> in-memory job -> Excel export, with a one-page React UI. segment/classify/normalize/confidence and the `local_vlm` provider are still stubs that raise `NotImplementedError`; each uploaded file is treated as one form.
+An engine that reads commitment forms received by the Central Virology Laboratory (scanned PDFs, Hebrew), extracts fields, flags anything uncertain, and exports to Excel. **Currently Phase 3:** upload (PDF or image) -> `ingest` -> `preprocess` -> `segment` (pages -> forms) -> `extract` (provider, per form) -> job store -> Excel export, with a one-page React UI. classify/normalize/confidence and the `local_vlm` provider are still stubs that raise `NotImplementedError`.
 
 ## Commands
 
@@ -33,9 +33,9 @@ No Python linter or formatter is configured. `eval/run_eval.py` tests live in `b
 
 ## Architecture
 
-**Pipeline** (`backend/app/pipeline/`, one module per stage): `ingest` (PDF/image -> `PageImage` per page; type from magic bytes; typed `IngestError`s) -> `preprocess` (perspective -> deskew -> orientation -> illumination -> resize, plus a binarized `ocr_image`; image ops in `app/imaging/`, OCR behind `app/ocr/base.OcrEngine`) -> `segment` (pages -> forms) -> `classify` (form type id) -> `extract` (raw values via a provider) -> `normalize` (digits, dates, sender from the closed list) -> `confidence` (score + `needs_review`). `orchestrator.Orchestrator` runs them per file and fills `Job.groups`; on failure `Job.error` holds only the exception type.
+**Pipeline** (`backend/app/pipeline/`, one module per stage): `ingest` (PDF/image -> `PageImage` per page; type from magic bytes; typed `IngestError`s) -> `preprocess` (perspective -> deskew -> orientation -> illumination -> resize, plus a binarized `ocr_image`; image ops in `app/imaging/`, OCR behind `app/ocr/base.OcrEngine`) -> `segment` (pages -> forms: one OCR fingerprint per page, weighted rules per adjacent pair, `provider.compare_pages` only for pairs below the review threshold; irrelevant pages go to `Job.irrelevant_pages`) -> `classify` (form type id) -> `extract` (raw values via a provider) -> `normalize` (digits, dates, sender from the closed list) -> `confidence` (score + `needs_review`). `orchestrator.Orchestrator` runs them per file and fills `Job.groups`; on failure `Job.error` holds only the exception type.
 
-**Providers** (`backend/app/providers/`): the pipeline depends only on `ExtractionProvider` (`base.py`); `ExtractionProvider` is a Protocol (`extract_form`, `reread_field`, `classify`); `create_provider(settings)` picks `claude`, `local_vlm` or `fake` (fixed dummy data, used by tests) from `CE_PROVIDER`. `main.create_app(settings, provider)` builds the API so tests can inject `FakeProvider`; `jobs.JobStore` keeps jobs in memory and expires them after `CE_JOB_TTL_S`. **Settings** (`config.py`) are read from `CE_*` env vars. `storage/tmp.py` keeps uploads under generated names in a per-job dir and deletes it; `export/xlsx.py` writes the Excel output.
+**Providers** (`backend/app/providers/`): the pipeline depends only on `ExtractionProvider` (`base.py`); `ExtractionProvider` is a Protocol (`extract_form`, `reread_field`, `classify`); prompts, output JSON schemas, page encoding and output parsing are shared in `common.py`, so a vision provider only handles its own request/response format; `create_provider(settings)` picks `claude`, `gemini`, `local_vlm` or `fake` (fixed dummy data, used by tests) from `CE_PROVIDER`. `main.create_app(settings, provider)` builds the API so tests can inject `FakeProvider`; **Job stores** (`backend/app/storage/`): the API depends only on the `JobStore` Protocol (`base.py`); `create_job_store(settings, tmp)` picks `sqlite` (default, `CE_DB_PATH`, schema in `backend/data/schema.sql`, `init()` on startup) or `memory` from `CE_STORAGE`. `get` returns a copy, so a changed job must be saved with `update`. Both expire jobs after `CE_JOB_TTL_S`; `delete` also removes the job's temp files. Tests run `test_main.py`/`test_e2e.py` against both stores (`conftest.py`) and `test_job_stores.py` is the shared contract. **Settings** (`config.py`) are read from `CE_*` env vars. `storage/tmp.py` keeps uploads under generated names in a per-job dir and deletes it; `export/xlsx.py` writes the Excel output.
 
 The reference data is tied to the model by field names and ids, and the tests enforce the coupling:
 
@@ -56,6 +56,7 @@ The reference data is tied to the model by field names and ids, and the tests en
 - Page rotation must be detected from the image: PDF `/Rotate` is 0 on every sample page. All samples are image-only scans (OCR always needed).
 - `PageImage.image` (sent to the VLM) is never binarized; binarization goes only into `ocr_image`. `original` keeps full resolution for crops; `image_scale` maps between them.
 - Orientation is never guessed: if neither OSD nor the 4-rotation trial is clear, the page stays as is with flag `orientation_uncertain` (`orientation_unavailable` without Tesseract).
+- **Segmentation never trusts the VLM alone:** its weight (0.8) is below the review threshold, so a boundary decided only by the model is flagged `split_uncertain`. `tests/test_segment_samples.py` needs `samples/` and Tesseract; on Windows `TESSDATA_PREFIX` must be an ASCII path (a Hebrew path makes Tesseract return garbage).
 - Tesseract is optional at runtime (`create_ocr_engine` returns None); tests use fake `OcrEngine`s and must not require it.
 - Names/IDs in `samples/` were replaced with handwriting for anonymization, so accuracy on samples will not reflect real data.
 
@@ -72,7 +73,7 @@ Follow clean-code principles and keep a clear architecture as the extraction cod
 
 ## Privacy
 
-The models and `samples/` contain patient data. Never log field values (log ids/counts only); `Job.error` must not contain values. Write preview images to a temp directory and delete them afterward. Docs describe location and format only, never real values; test data must be dummy values.
+The models, `samples/` and the job database (`app.db`) contain patient data; the database holds no images and is git/docker-ignored. Never log field values (log ids/counts only); `Job.error` must not contain values. Write preview images to a temp directory and delete them afterward. Docs describe location and format only, never real values; test data must be dummy values.
 
 ## Language convention
 

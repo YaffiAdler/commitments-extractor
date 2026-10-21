@@ -1,8 +1,8 @@
 """Run the pipeline stages over the files of one job.
 
-Wired so far: ingest -> preprocess -> extract. Each file is treated as a
-single form; segment, classify, normalize and confidence are not wired in
-yet, so every field stays at confidence 0 / needs review.
+Wired so far: ingest -> preprocess -> segment -> extract. classify,
+normalize and confidence are not wired in yet, so every field stays at
+confidence 0 / needs review.
 """
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from pathlib import Path
 
 from app.config import Settings
 from app.ocr.base import OcrEngine
-from app.pipeline import extract, ingest, preprocess
+from app.pipeline import extract, ingest, preprocess, segment
 from app.providers.base import ExtractionProvider
-from app.schemas import FormGroup, FormType, Job, JobStatus, Sender
+from app.schemas import FormType, Job, JobStatus, Segmentation, Sender
 
 
 class Orchestrator:
@@ -43,7 +43,10 @@ class Orchestrator:
         job.status = JobStatus.RUNNING
         try:
             for path in stored_files:
-                job.groups.extend(self._process_file(path))
+                result = self._process_file(path)
+                job.groups.extend(result.groups)
+                job.irrelevant_pages.extend(result.irrelevant_pages)
+                job.split_vlm_calls += result.vlm_calls
         except Exception as exc:
             job.status = JobStatus.FAILED
             job.error = type(exc).__name__
@@ -51,20 +54,14 @@ class Orchestrator:
         job.status = JobStatus.DONE
         return job
 
-    def _process_file(self, path: Path) -> list[FormGroup]:
+    def _process_file(self, path: Path) -> Segmentation:
         pages = [
             preprocess.preprocess(page, self._settings.preprocess, self._ocr)
             for page in ingest.load_file(path, self._ingest_limits)
         ]
-        if not pages:
-            return []
-        return [self._process_form(pages)]
-
-    def _process_form(self, pages: list[ingest.PageImage]) -> FormGroup:
-        commitment = extract.extract(pages, None, self._provider)
-        return FormGroup(
-            source_file=pages[0].file_id,
-            pages=[p.page_no for p in pages],
-            rotation=pages[0].rotation,
-            commitment=commitment,
-        )
+        result = segment.segment(pages, self._ocr, self._form_types, self._provider,
+                                 self._settings.review_threshold)
+        by_page_no = {page.page_no: page for page in pages}
+        for group in result.groups:
+            group.commitment = extract.extract([by_page_no[n] for n in group.pages], None, self._provider)
+        return result

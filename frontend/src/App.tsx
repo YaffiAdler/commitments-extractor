@@ -1,5 +1,15 @@
 import { useState } from 'react'
-import { type Commitment, type Field, type Job, deleteJob, exportJob, getJob, uploadFile } from './api'
+import {
+  type Commitment,
+  type Field,
+  type FormGroup,
+  type Job,
+  SPLIT_UNCERTAIN,
+  deleteJob,
+  exportJob,
+  getJob,
+  uploadFile,
+} from './api'
 
 const POLL_INTERVAL_MS = 1000
 const EXPORT_FILE_NAME = 'commitments.xlsx'
@@ -30,6 +40,13 @@ function cell(value: Field | Field[]): { text: string; review: boolean } {
   }
   return { text: value.value ?? '', review: value.needs_review }
 }
+
+const SPLIT_UNCERTAIN_TEXT = 'ייתכן שפוצל לא נכון'
+
+// Pages are 0-based in the API and 1-based for the reader.
+const pageNumbers = (pages: number[]) => pages.map((p) => p + 1).join(', ')
+
+const splitUncertain = (group: FormGroup) => group.split_reasons.includes(SPLIT_UNCERTAIN)
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -105,6 +122,8 @@ function App() {
               {COLUMNS.map((c) => (
                 <th key={c.key}>{c.header}</th>
               ))}
+              <th>עמודים</th>
+              <th>פיצול</th>
             </tr>
           </thead>
           <tbody>
@@ -118,10 +137,20 @@ function App() {
                     </td>
                   )
                 })}
+                <td>{pageNumbers(group.pages)}</td>
+                <td className={splitUncertain(group) ? 'review' : undefined}>
+                  {splitUncertain(group) ? SPLIT_UNCERTAIN_TEXT : ''}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+
+      {job && job.irrelevant_pages.length > 0 && (
+        <p className="review-note">
+          עמודים שלא שויכו לאף טופס: {pageNumbers(job.irrelevant_pages.map((p) => p.page))}
+        </p>
       )}
 
       <p className="legend">

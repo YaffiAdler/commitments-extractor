@@ -14,3 +14,8 @@ def test_reread_and_classify():
     provider = FakeProvider()
     assert provider.reread_field([], "central_numbers", None) == [fake.FAKE_CENTRAL_NUMBER]
     assert provider.classify([], {}) is None
+
+
+def test_compare_pages_says_every_page_starts_a_form():
+    relation = FakeProvider().compare_pages(None, None)
+    assert (relation.same_form, relation.page_b_type) == (False, "start")

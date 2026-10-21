@@ -5,6 +5,8 @@ Run locally:  uvicorn app.main:app --reload   (from backend/)
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, status
@@ -12,7 +14,6 @@ from fastapi.responses import FileResponse
 
 from app.config import Settings
 from app.export.xlsx import write_xlsx
-from app.jobs import JobStore
 from app.ocr import create_ocr_engine
 from app.pipeline.ingest import BYTES_PER_MB, FILE_SUFFIXES, MAGIC_BYTES_NEEDED, detect_file_kind
 from app.pipeline.classify import load_form_types
@@ -21,6 +22,7 @@ from app.pipeline.orchestrator import Orchestrator
 from app.providers import create_provider
 from app.providers.base import ExtractionProvider
 from app.schemas import Job, JobStatus
+from app.storage import create_job_store
 from app.storage.tmp import TempStorage
 
 logger = logging.getLogger(__name__)
@@ -32,7 +34,7 @@ XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.s
 def create_app(settings: Settings | None = None, provider: ExtractionProvider | None = None) -> FastAPI:
     settings = settings or Settings()
     storage = TempStorage(settings.tmp_dir)
-    jobs = JobStore(storage, settings.job_ttl_s)
+    jobs = create_job_store(settings, storage)
     orchestrator = Orchestrator(
         settings=settings,
         provider=provider or create_provider(settings),
@@ -40,9 +42,18 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
         senders=load_senders(settings.senders_path),
         ocr=create_ocr_engine(settings),
     )
-    jobs.purge_expired()  # leftovers from a previous run
 
-    app = FastAPI(title="commitments-extractor")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        jobs.init()
+        # Jobs a previous run did not finish would otherwise stay "running" forever.
+        interrupted = jobs.fail_interrupted()
+        if interrupted:
+            logger.warning("%d unfinished jobs from a previous run marked as failed", interrupted)
+        jobs.purge_expired()  # leftovers from a previous run
+        yield
+
+    app = FastAPI(title="commitments-extractor", lifespan=lifespan)
 
     def require_job(job_id: str) -> Job:
         job = jobs.get(job_id)
@@ -51,11 +62,19 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
         return job
 
     def run_job(job: Job, stored: Path) -> None:
+        # The orchestrator changes ``job`` in place; persist the start and the outcome.
+        job.status = JobStatus.RUNNING
+        if not jobs.update(job):
+            logger.info("job %s was deleted before it started", job.id)
+            return
         try:
             orchestrator.run(job, [stored])
         except Exception:
             # job.error already holds the exception type; log the id only.
             logger.exception("job %s failed", job.id)
+        if not jobs.update(job):
+            logger.info("job %s was deleted while running", job.id)
+            return
         logger.info("job %s finished: %s, %d forms", job.id, job.status.value, len(job.groups))
 
     @app.get("/health")
@@ -73,7 +92,7 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
         job = Job()
         stored = storage.save_upload(job.id, data, FILE_SUFFIXES[kind])
         job.files.append(stored.name)
-        jobs.add(job)
+        jobs.create(job)
         background.add_task(run_job, job, stored)
         return job
 

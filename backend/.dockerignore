@@ -2,3 +2,5 @@ tests
 .pytest_cache
 **/__pycache__
 *.egg-info
+*.db
+*.db-journal
