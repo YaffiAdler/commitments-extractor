@@ -3,7 +3,7 @@ does not leave the lab's network."""
 from __future__ import annotations
 
 from app.pipeline.ingest import PageImage
-from app.schemas import Commitment, FormType, PageRelation
+from app.schemas import Commitment, FormClassification, FormType, PageRelation
 
 
 class LocalVlmProvider:
@@ -18,7 +18,7 @@ class LocalVlmProvider:
     def reread_field(self, pages: list[PageImage], field_name: str, form_type: FormType | None) -> list[str]:
         raise NotImplementedError
 
-    def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> str | None:
+    def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:
         raise NotImplementedError
 
     def compare_pages(self, page_a: PageImage, page_b: PageImage) -> PageRelation:

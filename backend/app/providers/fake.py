@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import date
 
 from app.pipeline.ingest import PageImage
-from app.schemas import Commitment, Field, FieldSource, FormType, PageRelation
+from app.schemas import UNKNOWN_FORM_TYPE, Commitment, Field, FieldSource, FormClassification, FormType, PageRelation
 
 FAKE_RELATION_REASON = "fake provider"
 FAKE_FIRST_NAME = "ישראל"
@@ -17,6 +17,9 @@ FAKE_CENTRAL_NUMBER = "123456"
 FAKE_RECEIVED_DATE = date(2025, 1, 1)
 FAKE_SENDER = "כללית"
 FAKE_COMMITMENT_NUMBER = "0001234567"
+FAKE_FORM_TYPE_ID = "clalit_form17"
+FAKE_SENDER_RAW = "שירותי בריאות כללית"
+FAKE_EVIDENCE = "fake provider"
 
 
 def _printed(value: str) -> Field[str]:
@@ -47,8 +50,11 @@ class FakeProvider:
         fields = value if isinstance(value, list) else [value]
         return [f.raw_value for f in fields if f.raw_value is not None]
 
-    def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> str | None:
-        return None
+    def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:
+        """A Clalit Form 17 when that type is loaded, else "unknown"; the sender
+        is an alias of the Clalit entry in senders.json."""
+        form_type = FAKE_FORM_TYPE_ID if FAKE_FORM_TYPE_ID in form_types else UNKNOWN_FORM_TYPE
+        return FormClassification(form_type=form_type, sender_raw=FAKE_SENDER_RAW, evidence=FAKE_EVIDENCE)
 
     def compare_pages(self, page_a: PageImage, page_b: PageImage) -> PageRelation:
         """Every page starts its own form (the most common case in the samples)."""

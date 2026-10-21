@@ -1,4 +1,5 @@
-"""Stage 6: normalize raw values (digits only, dates, sender from the closed list).
+"""Stage 6: normalize raw values (digits only, dates). The sender is matched
+against the closed list in stage 4 (``classify.SenderMatcher``).
 
 Never guess: a value that cannot be normalized stays empty and gets a reason,
 and a missing year on a handwritten date is not filled in silently.

@@ -1,0 +1,68 @@
+# Fallback for forms whose layout matches no other file here (form_type
+# "unknown"). Not a layout: classify.load_form_types leaves it out, so it is
+# never offered to the model and has no title keywords for segmentation.
+id: generic
+display_name: Unknown layout — generic commitment form
+certainty: uncertain
+seen_in: none (fallback)
+detect:
+  keywords: []
+  logo_hint: none
+fields:
+  first_name:
+    labels:
+    - שם פרטי
+    - שם
+    - שם המטופל
+    - שם החולה
+    - נבדק
+    hint: The patient's first name, printed, handwritten or on an admission sticker. May share one field with the last name.
+    multiple: false
+    handwritten_possible: true
+  last_name:
+    labels:
+    - שם משפחה
+    - שם
+    - שם המטופל
+    - שם החולה
+    hint: The patient's last name; may share one field with the first name.
+    multiple: false
+    handwritten_possible: true
+  id_number:
+    labels:
+    - ת.ז.
+    - תעודת זהות
+    - מספר זהות
+    hint: The patient's ID number — not the ID of whoever signed or printed the form.
+    multiple: false
+    handwritten_possible: true
+  central_numbers:
+    labels:
+    - מרכזי
+    hint: 6-digit barcode sticker with the word 'מרכזי' printed next to it (usually highlighted in yellow), or a number handwritten in its place; there may be several stickers.
+    multiple: true
+    handwritten_possible: true
+  received_date:
+    labels:
+    - התקבל
+    - המעבדה המרכזית לנגיפים
+    hint: Rectangular 'התקבל' stamp with a DD-MM-YYYY date, or a handwritten date below/next to the central number.
+    multiple: false
+    handwritten_possible: true
+  sender:
+    labels:
+    - גורם שולח
+    hint: The body that sent the sample and is billed — the HMO on HMO forms, the hospital on hospital forms; not the HMO on a hospital admission sticker, not a clinic or department.
+    multiple: false
+    handwritten_possible: true
+  commitment_numbers:
+    labels:
+    - מספר התחייבות
+    - התחייבות
+    - דרישה
+    - דגימה
+    hint: An explicit commitment / request ('דרישה') number, or a sample ('דגימה') number only where the form says it serves as the commitment. Never a barcode or sticker number without such a label.
+    multiple: true
+    handwritten_possible: true
+pages:
+  typical: 1

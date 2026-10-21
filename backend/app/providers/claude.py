@@ -24,13 +24,13 @@ from app.providers.common import (
     commitment_from_output,
     encode_page,
     extract_instruction,
-    form_type_from_output,
-    form_type_schema,
+    form_classification_from_output,
+    form_classification_schema,
     page_relation_from_output,
     readings_from_output,
     reread_instruction,
 )
-from app.schemas import Commitment, FormType, PageRelation
+from app.schemas import Commitment, FormClassification, FormType, PageRelation
 
 API_URL = "https://api.anthropic.com/v1/messages"
 API_VERSION = "2023-06-01"
@@ -62,11 +62,11 @@ class ClaudeProvider:
                                f"Record every reading of the '{field_name}' field.", READINGS_SCHEMA)
         return readings_from_output(data)
 
-    def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> str | None:
+    def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:
         data = self._call_tool(pages, classify_instruction(form_types), "record_form_type",
-                               "Record the matching form type id, or null if none matches.",
-                               form_type_schema(form_types))
-        return form_type_from_output(data, form_types)
+                               "Record the form type id (or 'unknown') and the sender as printed.",
+                               form_classification_schema(form_types))
+        return form_classification_from_output(data, form_types)
 
     def compare_pages(self, page_a: PageImage, page_b: PageImage) -> PageRelation:
         data = self._call_tool([page_a, page_b], COMPARE_PAGES_INSTRUCTION, "record_page_relation",

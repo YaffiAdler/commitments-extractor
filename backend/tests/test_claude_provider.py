@@ -9,6 +9,8 @@ import pytest
 
 from app.pipeline.ingest import PageImage
 from app.providers.base import ProviderError
+from app.config import Settings
+from app.pipeline.classify import load_form_types
 from app.providers.claude import API_KEY_ENV, ClaudeProvider
 
 DUMMY_INPUT = {
@@ -84,3 +86,22 @@ def test_compare_pages_sends_both_pages(monkeypatch):
 
     result = _provider(handler).compare_pages(_page(), _page())
     assert (result.same_form, result.page_b_type) == (True, "continuation")
+
+
+def test_classify_sends_one_page_with_the_type_list(monkeypatch):
+    monkeypatch.setenv(API_KEY_ENV, "dummy")
+    form_types = load_form_types(Settings().form_types_dir)
+    answer = {"form_type": "maccabi_online", "sender_raw": "מכבי שירותי בריאות", "evidence": "logo"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        content = body["messages"][0]["content"]
+        assert [block["type"] for block in content] == ["image", "text"]
+        assert "maccabi_online" in content[-1]["text"]
+        schema = body["tools"][0]["input_schema"]
+        assert "unknown" in schema["properties"]["form_type"]["enum"]
+        return httpx.Response(200, json={"content": [{"type": "tool_use", "name": body["tool_choice"]["name"],
+                                                      "input": answer}]})
+
+    result = _provider(handler).classify([_page()], form_types)
+    assert (result.form_type, result.sender_raw) == ("maccabi_online", "מכבי שירותי בריאות")

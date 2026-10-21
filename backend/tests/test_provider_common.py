@@ -15,12 +15,13 @@ from app.providers.common import (
     UNPARSED_DATE_REASON,
     commitment_from_output,
     encode_page,
-    form_type_from_output,
+    form_classification_from_output,
+    form_classification_schema,
     page_relation_from_output,
     readings_from_output,
 )
 from app.providers.base import ProviderError
-from app.schemas import PageRelation, PageType
+from app.schemas import UNKNOWN_FORM_TYPE, FormClassification, PageRelation, PageType
 
 DUMMY_OUTPUT = {
     "first_name": "משה",
@@ -56,10 +57,31 @@ def test_readings_drop_blanks_and_non_strings():
     assert readings_from_output({}) == []
 
 
-def test_unknown_form_type_is_none():
-    form_types = {"clalit": object()}
-    assert form_type_from_output({"form_type_id": "clalit"}, form_types) == "clalit"
-    assert form_type_from_output({"form_type_id": "other"}, form_types) is None
+def test_classification_keeps_a_known_form_type():
+    answer = form_classification_from_output(
+        {"form_type": "clalit", "sender_raw": " כללית ", "evidence": "logo"}, {"clalit": object()})
+    assert answer == FormClassification(form_type="clalit", sender_raw="כללית", evidence="logo")
+
+
+def test_classification_of_an_unloaded_id_is_unknown():
+    answer = form_classification_from_output({"form_type": "other", "sender_raw": None, "evidence": ""}, {})
+    assert answer.form_type == UNKNOWN_FORM_TYPE and answer.sender_raw is None
+
+
+def test_blank_sender_is_none():
+    answer = form_classification_from_output({"form_type": "unknown", "sender_raw": "  ", "evidence": ""}, {})
+    assert answer.sender_raw is None
+
+
+def test_classification_missing_key_is_provider_error():
+    with pytest.raises(ProviderError):
+        form_classification_from_output({"form_type": "clalit"}, {"clalit": object()})
+
+
+def test_classification_schema_offers_unknown_and_matches_the_model():
+    schema = form_classification_schema({"clalit": object()})
+    assert schema["properties"]["form_type"]["enum"] == ["clalit", UNKNOWN_FORM_TYPE]
+    assert set(schema["required"]) == set(FormClassification.model_fields)
 
 
 def test_large_page_is_downscaled_before_sending():

@@ -92,7 +92,9 @@ class Commitment(BaseModel):
     """
 
     form_type_id: Optional[str] = PydField(
-        default=None, description="id of the matching backend/form_types/*.yaml, None if unknown"
+        default=None,
+        description="id of the backend/form_types/*.yaml used for extraction ('generic' when the "
+                    "layout is unknown); None if the form was not classified",
     )
     first_name: Field[str] = PydField(default_factory=Field[str])
     last_name: Field[str] = PydField(default_factory=Field[str])
@@ -118,6 +120,7 @@ class Commitment(BaseModel):
 
 
 SPLIT_UNCERTAIN = "split_uncertain"
+FORM_TYPE_UNKNOWN = "form_type_unknown"
 
 
 class FormGroup(BaseModel):
@@ -128,6 +131,8 @@ class FormGroup(BaseModel):
     ``split_confidence`` scores the boundaries of the group; below the review
     threshold ``split_reasons`` holds ``"split_uncertain"`` (the form may be
     split wrongly), next to codes for how the boundaries were decided.
+    ``form_reasons`` holds flags about the form as a whole, e.g.
+    ``"form_type_unknown"`` (no known layout matched; read with ``generic.yaml``).
     """
 
     id: str = PydField(default_factory=lambda: uuid4().hex)
@@ -136,11 +141,13 @@ class FormGroup(BaseModel):
     rotation: int = PydField(default=0, description="clockwise degrees applied before reading")
     split_confidence: float = PydField(default=1.0, ge=0.0, le=1.0)
     split_reasons: list[str] = PydField(default_factory=list)
+    form_reasons: list[str] = PydField(default_factory=list)
     commitment: Commitment = PydField(default_factory=Commitment)
 
     @property
     def needs_review(self) -> bool:
-        return self.commitment.needs_review or SPLIT_UNCERTAIN in self.split_reasons
+        return (self.commitment.needs_review or SPLIT_UNCERTAIN in self.split_reasons
+                or FORM_TYPE_UNKNOWN in self.form_reasons)
 
 
 class IrrelevantPage(BaseModel):
@@ -163,6 +170,23 @@ class PageRelation(BaseModel):
     same_form: bool
     reason: str
     page_b_type: PageType
+
+
+UNKNOWN_FORM_TYPE = "unknown"
+
+
+class FormClassification(BaseModel):
+    """A vision model's answer about the first page of one form.
+
+    ``form_type`` is a form type id or ``"unknown"``; ``sender_raw`` is the
+    sender's name as printed (None if not visible), matched against the closed
+    list by the pipeline. ``evidence`` is free model text: it may quote the
+    page, so it is never logged or stored.
+    """
+
+    form_type: str
+    sender_raw: Optional[str] = None
+    evidence: str
 
 
 class Segmentation(BaseModel):

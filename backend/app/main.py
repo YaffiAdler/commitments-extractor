@@ -16,7 +16,7 @@ from app.config import Settings
 from app.export.xlsx import write_xlsx
 from app.ocr import create_ocr_engine
 from app.pipeline.ingest import BYTES_PER_MB, FILE_SUFFIXES, MAGIC_BYTES_NEEDED, detect_file_kind
-from app.pipeline.classify import load_form_types
+from app.pipeline.classify import load_form_types, load_generic_form_type
 from app.pipeline.normalize import load_senders
 from app.pipeline.orchestrator import Orchestrator
 from app.providers import create_provider
@@ -39,6 +39,7 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
         settings=settings,
         provider=provider or create_provider(settings),
         form_types=load_form_types(settings.form_types_dir),
+        generic_form_type=load_generic_form_type(settings.form_types_dir),
         senders=load_senders(settings.senders_path),
         ocr=create_ocr_engine(settings),
     )

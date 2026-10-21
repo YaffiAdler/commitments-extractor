@@ -1,5 +1,6 @@
 from app.providers import fake
 from app.providers.fake import FakeProvider
+from app.schemas import UNKNOWN_FORM_TYPE
 
 
 def test_extract_form_returns_dummy_values():
@@ -13,7 +14,8 @@ def test_extract_form_returns_dummy_values():
 def test_reread_and_classify():
     provider = FakeProvider()
     assert provider.reread_field([], "central_numbers", None) == [fake.FAKE_CENTRAL_NUMBER]
-    assert provider.classify([], {}) is None
+    assert provider.classify([], {}).form_type == UNKNOWN_FORM_TYPE
+    assert provider.classify([], {fake.FAKE_FORM_TYPE_ID: None}).form_type == fake.FAKE_FORM_TYPE_ID
 
 
 def test_compare_pages_says_every_page_starts_a_form():

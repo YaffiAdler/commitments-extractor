@@ -2,14 +2,23 @@ import pymupdf
 import pytest
 
 from app.config import Settings
+from app.pipeline.classify import GENERIC_FORM_TYPE_ID, load_form_types, load_generic_form_type
+from app.pipeline.normalize import load_senders
 from app.pipeline.orchestrator import Orchestrator
+from app.providers import fake
 from app.providers.fake import FakeProvider
-from app.schemas import Job, JobStatus, PageRelation
+from app.schemas import FORM_TYPE_UNKNOWN, Job, JobStatus, PageRelation
+
+
+def _build(provider: FakeProvider) -> Orchestrator:
+    settings = Settings()
+    return Orchestrator(settings, provider, form_types={},
+                        generic_form_type=load_generic_form_type(settings.form_types_dir), senders=[])
 
 
 def _orchestrator(monkeypatch) -> Orchestrator:
     monkeypatch.setenv("CE_RENDER_DPI", "72")
-    return Orchestrator(Settings(), FakeProvider(), form_types={}, senders=[])
+    return _build(FakeProvider())
 
 
 def _blank_pdf(path, pages: int):
@@ -40,7 +49,7 @@ def test_each_form_is_extracted_with_its_own_pages(tmp_path, monkeypatch):
             return super().extract_form(pages, form_type)
 
     monkeypatch.setenv("CE_RENDER_DPI", "72")
-    job = Orchestrator(Settings(), SameFormProvider(), form_types={}, senders=[]).run(
+    job = _build(SameFormProvider()).run(
         Job(), [_blank_pdf(tmp_path / "f.pdf", 3)])
     assert [g.pages for g in job.groups] == [[0, 1, 2]]
     assert seen == [[0, 1, 2]]
@@ -52,7 +61,7 @@ def test_irrelevant_pages_are_kept_on_the_job(tmp_path, monkeypatch):
             return PageRelation(same_form=False, reason="dummy", page_b_type="irrelevant")
 
     monkeypatch.setenv("CE_RENDER_DPI", "72")
-    job = Orchestrator(Settings(), IrrelevantProvider(), form_types={}, senders=[]).run(
+    job = _build(IrrelevantProvider()).run(
         Job(), [_blank_pdf(tmp_path / "f.pdf", 2)])
     assert [g.pages for g in job.groups] == [[0]]
     assert [p.page for p in job.irrelevant_pages] == [1]
@@ -71,7 +80,7 @@ def test_pages_are_preprocessed_before_extraction(tmp_path, monkeypatch):
     with pymupdf.open() as doc:
         doc.new_page()
         doc.save(pdf)
-    Orchestrator(Settings(), RecordingProvider(), form_types={}, senders=[]).run(Job(), [pdf])
+    _build(RecordingProvider()).run(Job(), [pdf])
     assert len(seen) == 1 and seen[0].ocr_image is not None
     assert "orientation_unavailable" in seen[0].flags
 
@@ -84,3 +93,39 @@ def test_failure_records_exception_type(tmp_path, monkeypatch):
         _orchestrator(monkeypatch).run(job, [bad])
     assert job.status is JobStatus.FAILED
     assert job.error and job.error.isidentifier()
+
+
+def test_each_form_is_classified_and_gets_the_matched_sender(tmp_path, monkeypatch):
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    settings = Settings()
+    seen = []
+
+    class RecordingProvider(FakeProvider):
+        def extract_form(self, pages, form_type):
+            seen.append(form_type.id)
+            return super().extract_form(pages, form_type)
+
+    orchestrator = Orchestrator(settings, RecordingProvider(), form_types=load_form_types(settings.form_types_dir),
+                                generic_form_type=load_generic_form_type(settings.form_types_dir),
+                                senders=load_senders(settings.senders_path))
+    job = orchestrator.run(Job(), [_blank_pdf(tmp_path / "f.pdf", 1)])
+    commitment = job.groups[0].commitment
+    assert seen == [fake.FAKE_FORM_TYPE_ID] and commitment.form_type_id == fake.FAKE_FORM_TYPE_ID
+    assert (commitment.sender.value, commitment.sender.raw_value) == ("כללית", fake.FAKE_SENDER_RAW)
+    assert not commitment.sender.needs_review and job.groups[0].form_reasons == []
+
+
+def test_unknown_form_type_is_extracted_with_the_generic_yaml(tmp_path, monkeypatch):
+    seen = []
+
+    class UnknownProvider(FakeProvider):
+        def extract_form(self, pages, form_type):
+            seen.append(form_type.id)
+            return super().extract_form(pages, form_type)
+
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    job = _build(UnknownProvider()).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 1)])
+    assert seen == [GENERIC_FORM_TYPE_ID]
+    assert job.groups[0].form_reasons == [FORM_TYPE_UNKNOWN] and job.groups[0].needs_review
+    # senders=[]: nothing to match against, so the sender stays empty.
+    assert job.groups[0].commitment.sender.value is None

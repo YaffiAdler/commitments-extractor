@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from app.imaging.geometry import downscale_to_max_edge
 from app.pipeline.ingest import PageImage
 from app.providers.base import ProviderError
-from app.schemas import Commitment, Field, FormType, PageRelation
+from app.schemas import UNKNOWN_FORM_TYPE, Commitment, Field, FormClassification, FormType, PageRelation
 
 # Preprocess already downscales; this guards the case where that step is
 # switched off (minimal data out; the APIs do not use more resolution anyway).
@@ -29,8 +29,8 @@ UNPARSED_DATE_REASON = "unparsed_date"
 LIST_FIELDS = ("central_numbers", "commitment_numbers")
 SCALAR_STR_FIELDS = ("first_name", "last_name", "id_number", "sender")
 DATE_FIELD = "received_date"
+SENDER_FIELD = "sender"
 READINGS_KEY = "readings"
-FORM_TYPE_KEY = "form_type_id"
 
 SYSTEM_PROMPT = (
     "You read scanned Hebrew commitment forms sent to a virology laboratory. "
@@ -82,11 +82,17 @@ COMPARE_PAGES_INSTRUCTION = (
 )
 
 
-def form_type_schema(form_types: dict[str, FormType]) -> dict[str, Any]:
+def form_classification_schema(form_types: dict[str, FormType]) -> dict[str, Any]:
+    """Output schema of ``classify``: a known form type id or "unknown", the
+    sender as printed and a short reason."""
     return {
         "type": "object",
-        "properties": {FORM_TYPE_KEY: {"type": ["string", "null"], "enum": [*form_types, None]}},
-        "required": [FORM_TYPE_KEY],
+        "properties": {
+            "form_type": {"type": "string", "enum": [*form_types, UNKNOWN_FORM_TYPE]},
+            "sender_raw": {**_NULLABLE_STRING, "description": "the sender's name copied as printed; null if not visible"},
+            "evidence": {"type": "string", "description": "short reason (logo, title), without names or numbers"},
+        },
+        "required": ["form_type", "sender_raw", "evidence"],
     }
 
 
@@ -100,8 +106,19 @@ def reread_instruction(field_name: str) -> str:
 
 
 def classify_instruction(form_types: dict[str, FormType]) -> str:
-    options = "\n".join(f"- {ft.id}: {ft.display_name}" for ft in form_types.values())
-    return f"Which form type is this?\n{options}"
+    """Ask for the layout of the first page and the sender as printed, with
+    each type's own sender hint from its YAML."""
+    options = "\n".join(f"- {ft.id}: {ft.display_name}. Sender: {ft.fields[SENDER_FIELD].hint}"
+                        for ft in form_types.values())
+    return (
+        "This is the first page of one commitment form. Which form type is it? "
+        f"Answer '{UNKNOWN_FORM_TYPE}' if none of the types below matches.\n"
+        "sender_raw: the name of the body that sent the sample and is billed, copied as printed: "
+        "the HMO on HMO forms, the hospital on hospital forms, the insurer name on insurance screens. "
+        "Not the HMO on a hospital admission sticker and not a clinic or department. "
+        "null if no sender is visible.\n"
+        f"{options}"
+    )
 
 
 def encode_page(page: PageImage) -> str:
@@ -151,9 +168,16 @@ def readings_from_output(data: dict[str, Any]) -> list[str]:
     return [r.strip() for r in readings if isinstance(r, str) and r.strip()]
 
 
-def form_type_from_output(data: dict[str, Any], form_types: dict[str, FormType]) -> str | None:
-    form_type_id = data.get(FORM_TYPE_KEY)
-    return form_type_id if form_type_id in form_types else None
+def form_classification_from_output(data: dict[str, Any], form_types: dict[str, FormType]) -> FormClassification:
+    """Parse output matching ``form_classification_schema``. A form type that is
+    not a known id becomes "unknown"; a blank sender becomes None."""
+    try:
+        answer = FormClassification.model_validate(data)
+    except ValidationError as exc:
+        raise ProviderError("classification answer does not match the schema") from exc
+    sender_raw = answer.sender_raw.strip() if answer.sender_raw else ""
+    form_type = answer.form_type if answer.form_type in form_types else UNKNOWN_FORM_TYPE
+    return answer.model_copy(update={"form_type": form_type, "sender_raw": sender_raw or None})
 
 
 def page_relation_from_output(data: dict[str, Any]) -> PageRelation:

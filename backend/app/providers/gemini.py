@@ -28,13 +28,13 @@ from app.providers.common import (
     commitment_from_output,
     encode_page,
     extract_instruction,
-    form_type_from_output,
-    form_type_schema,
+    form_classification_from_output,
+    form_classification_schema,
     page_relation_from_output,
     readings_from_output,
     reread_instruction,
 )
-from app.schemas import Commitment, FormType, PageRelation
+from app.schemas import Commitment, FormClassification, FormType, PageRelation
 
 API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 API_KEY_ENV = "GEMINI_API_KEY"
@@ -93,9 +93,9 @@ class GeminiProvider:
     def reread_field(self, pages: list[PageImage], field_name: str, form_type: FormType | None) -> list[str]:
         return readings_from_output(self._generate_json(pages, reread_instruction(field_name), READINGS_SCHEMA))
 
-    def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> str | None:
-        data = self._generate_json(pages, classify_instruction(form_types), form_type_schema(form_types))
-        return form_type_from_output(data, form_types)
+    def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:
+        data = self._generate_json(pages, classify_instruction(form_types), form_classification_schema(form_types))
+        return form_classification_from_output(data, form_types)
 
     def compare_pages(self, page_a: PageImage, page_b: PageImage) -> PageRelation:
         return page_relation_from_output(

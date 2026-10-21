@@ -43,7 +43,7 @@ Page references: `P1 p5` = part 1, page 5. Quoted Hebrew is the literal text pri
 | `laniado_request` | **uncertain** | "לניאדו" logo | Small sticker | Laniado; HMO on the sticker | **Not found** (sticker "X" + 6 digits: uncertain) | 1 | Scan rotated 90°; gray background | P2 p14,15 |
 | `kaplan_external` | **uncertain** | "קפלן" logo + "כללית 100" | Admission sticker | Kaplan; HMO on the sticker | **Not found** (8-digit barcode: uncertain) | 1 | Weak "התקבל" stamp; handwritten notes | P2 p18,19 |
 
-Total: 25 types — 16 `certain` and 9 `uncertain`. All 48 pages were assigned a type. Every page is a single form, except `maccabi_online`, which is 2 pages, and only its first page is in the samples.
+Total: 25 types — 16 `certain` and 9 `uncertain`. `backend/form_types/generic.yaml` is not a layout but the fallback used when classification answers `unknown` (README assumption 33). All 48 pages were assigned a type. Every page is a single form, except `maccabi_online`, which is 2 pages, and only its first page is in the samples.
 
 **How the commitment number appears — summary:**
 - **Request ("דרישה")**: Maccabi — "דרישה:" (`maccabi_lab_request`) and "מספר התחייבות" (`maccabi_online`).

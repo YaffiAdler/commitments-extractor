@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from app.pipeline.ingest import PageImage
-from app.schemas import Commitment, FormType, PageRelation
+from app.schemas import Commitment, FormClassification, FormType, PageRelation
 
 
 class ProviderError(RuntimeError):
@@ -33,8 +33,10 @@ class ExtractionProvider(Protocol):
         (empty if the field is not on the form)."""
         ...
 
-    def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> str | None:
-        """Return the id of the matching form type, or None if none matches."""
+    def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:
+        """Name the form type of ``pages`` (the first page of one form): one of
+        the ``form_types`` ids or ``"unknown"``, plus the sender exactly as
+        printed (not matched to the closed list — the pipeline does that)."""
         ...
 
     def compare_pages(self, page_a: PageImage, page_b: PageImage) -> PageRelation:

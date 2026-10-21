@@ -2,7 +2,7 @@
 
 An engine that reads commitment forms received by the Central Virology Laboratory, extracts their fields, flags anything uncertain and exports to Excel.
 
-**Status: Phase 3 (splitting a page stack into forms)** — upload a PDF or an image, straighten and clean every page, split the pages into forms, extract each form through a provider, download an Excel file. Wired: `ingest -> preprocess -> segment -> extract`; classify, normalize and confidence are still stubs (`NotImplementedError`). No extraction accuracy has been measured.
+**Status: Phase 4 (form type and sender)** — upload a PDF or an image, straighten and clean every page, split the pages into forms, classify each form and match its sender to the closed list, extract each form through a provider, download an Excel file. Wired: `ingest -> preprocess -> segment -> classify -> extract`; normalize and confidence are still stubs (`NotImplementedError`). No extraction or classification accuracy has been measured.
 
 ## Layout
 ```
@@ -17,7 +17,7 @@ backend/app/ocr/              OcrEngine Protocol (base.py) + Tesseract
 backend/app/providers/        ExtractionProvider Protocol (base.py) + claude / gemini / local_vlm / fake (shared prompt/schema/parsing in common.py)
 backend/app/export/xlsx.py    Excel export
 backend/app/storage/          JobStore Protocol (base.py) + sqlite / memory job stores, tmp.py: temporary per-job files
-backend/form_types/*.yaml     one definition per observed form type (25 types)
+backend/form_types/*.yaml     one definition per observed form type (25 types) + generic.yaml (fallback)
 backend/data/senders.json     closed list of senders
 backend/data/schema.sql       SQLite job store schema
 backend/tests/                pytest
@@ -28,6 +28,7 @@ docs/edge_cases.md            edge cases actually observed
 scripts/render_previews.py    renders samples/ pages to PNG for manual review
 scripts/make_synthetic_variants.py   6 synthetic distortions of a page (used by the tests)
 scripts/preprocess_examples.py       before/after images -> docs/preprocess_examples/
+scripts/classify_report.py    stage 4 on samples/: type, sender as read, matched sender, score
 ```
 
 ## Running
@@ -153,6 +154,32 @@ Fields that need review are highlighted (in the table and in the Excel file).
 - SQLite `jobs`: new columns `irrelevant_pages_json`, `split_vlm_calls`. The `needs_review` columns now include the split flag.
 - Excel: new columns "עמודים" and "פיצול", plus a sheet "עמודים לא רלוונטיים" when there are such pages.
 - New dependency: `rapidfuzz`.
+
+## Assumptions (Phase 4 — form type and sender)
+32. **One classification call per form, on its first page only** (`ExtractionProvider.classify`). The answer is `{"form_type": <id> | "unknown", "sender_raw", "evidence"}` (`FormClassification`, schema `form_classification_schema`). The prompt lists every type with its `display_name` and the `sender.hint` of its YAML, and repeats the sender rule (the billed body; not the HMO on an admission sticker, not a clinic). `evidence` may quote the page, so it is neither logged nor stored.
+33. **Unknown layout** → `backend/form_types/generic.yaml`: the form is still extracted, with generic hints, and gets `form_type_unknown` in the new `FormGroup.form_reasons`, which puts it in review ("לבדיקה" in Excel). `generic.yaml` is not a layout: `load_form_types` leaves it out, so it is never offered to the model and gives segmentation no title keywords. `Commitment.form_type_id` is the YAML used, so it is `generic` for an unknown layout.
+34. **Sender matching** (`classify.SenderMatcher`; the decision algorithm is in the `classify.py` docstring): both sides are normalized (niqqud, quotes/gershayim, hyphens and maqaf, and whole generic phrases such as "המרכז הרפואי", "קופת חולים", "שירותי בריאות", "מעבדה", "בי"ח" are removed), then scored with rapidfuzz `WRatio` against every canonical name, alias and abbreviation, keeping the best score per sender. **≥ 88** is accepted unless a *different* sender is within **5 points** (ambiguous). Not in the list / ambiguous / not read → `sender = null`, `needs_review`, with `sender_not_in_list` / `sender_ambiguous` and up to 3 `sender_candidate:<name>=<score>` reasons. A match keeps `raw_value` and `confidence = score/100` (one signal only; the confidence stage may combine it), plus `sender_fuzzy_match` below 100. 88 is from the task; the 5-point gap was chosen by hand. Neither was fitted.
+35. **The sender read by `extract_form` is replaced** by the classified one, so the sender has a single source. The extraction schema is unchanged; its sender is ignored.
+36. **Generic words are dropped on purpose.** Without that, "קופ"ח מכבי-מעבדה שולחת" scored Maccabi 90 against Clalit/Meuhedet 86 (ambiguous), and "מכבי ... מעבדה" came close to the Rosenblatt lab. Side effect: text made *only* of generic words ("קופת חולים", "מרכז רפואי") is "not in list", which is the right answer for it. `extractOne` is not called directly: the full ranking (`process.extract`) is needed for the gap rule; its top entry is the same.
+37. **Text naming two listed bodies** (e.g. an HMO and a hospital campus on one line) comes out ambiguous, not as the first one. The model is asked for the single billed body, so this should be rare; it is flagged, not guessed.
+38. **Cost:** one extra provider call per form (classify), on top of extraction and the segmentation calls.
+
+### Phase 4 — what was checked
+- **Unit tests** (`tests/test_classify.py`, no network): normalization (gershayim, maqaf, niqqud, generic phrases as whole words only); different spellings, abbreviations ("כ"ל", "SZMC"), a name not in the list, two close candidates ("הרופא": Shamir/Assaf Harofeh vs. Shmuel Harofeh), aliases of one sender are not rivals, a blank sender, duplicate names in the list are rejected; names printed on the sample layouts against the real `senders.json`; known type → its YAML, `unknown` → `generic.yaml` + flag; first page only. Provider tests: Claude/Gemini requests carry the type list and the new schema; unknown ids become `unknown`; a malformed answer is a `ProviderError`. Orchestrator: the matched sender and `form_type_id` land in the `Commitment`. Full suite: 313 passed, 1 skipped (real Tesseract); `test_segment_samples.py` was not re-run (segmentation is unchanged).
+- **Report on samples/** (`scripts/classify_report.py` → `eval/classify_report.md`, git-ignored; organization names only, no patient fields): **not run with a real model** — this environment has no `ANTHROPIC_API_KEY` / `GEMINI_API_KEY`. Only a mechanical run with `CE_PROVIDER=fake` on 2 pages per file was made (its answers are fixed dummy values and mean nothing). Expected types come from `seen_in` of the YAML files (all 48 pages). To run: `CE_PROVIDER=gemini GEMINI_API_KEY=... TESSDATA_PREFIX=C:/Users/Public/tessdata .venv/Scripts/python scripts/classify_report.py`.
+
+### Phase 4 — what does not work / was not checked
+- **No classification or sender accuracy is known**, on samples/ or elsewhere.
+- Candidates and alias suggestions in the report are for a human; nothing is added to `senders.json` automatically.
+- The threshold and gap were not tuned on real model output.
+- `local_vlm.classify` is still `NotImplementedError`.
+- The UI shows `form_type_unknown` only through review highlighting of the row; there is no form-type column yet.
+
+### Phase 4 changes to existing interfaces
+- `ExtractionProvider.classify(pages, form_types)` returns `FormClassification` (was `str | None`). `common.form_type_schema` / `form_type_from_output` → `form_classification_schema` / `form_classification_from_output`; `classify_instruction` asks for the sender too. `FakeProvider.classify` returns `clalit_form17` (when loaded) and a Clalit alias.
+- `classify.classify(pages, form_types)` (stub) → `classify(pages, form_types, generic, matcher, provider) -> Classification`. New: `load_generic_form_type`, `SenderMatcher`, `normalize_sender_name`. `load_form_types` skips `generic.yaml`.
+- `Orchestrator(...)` takes a new required `generic_form_type`.
+- `FormGroup`: new `form_reasons`; `needs_review` also covers `form_type_unknown`. New model `FormClassification`; constants `UNKNOWN_FORM_TYPE`, `FORM_TYPE_UNKNOWN`. Stored inside `commitments.data_json`, so SQLite needs no schema change (old rows load with `form_reasons=[]`).
 
 ## Storage
 - **Interface:** `app/storage/base.py` defines the `JobStore` Protocol (`init`, `create`, `get`, `update`, `delete`, `list_commitments`, `fail_interrupted`, `purge_expired`); `create_job_store(settings, tmp)` builds `SqliteJobStore` (`storage/sqlite.py`) or `MemoryJobStore` (`storage/memory.py`). The API endpoints did not change.

@@ -9,6 +9,8 @@ import pytest
 
 from app.pipeline.ingest import PageImage
 from app.providers.base import ProviderError
+from app.config import Settings
+from app.pipeline.classify import load_form_types
 from app.providers.gemini import API_KEY_ENV, API_KEY_HEADER, MAX_ATTEMPTS, GeminiProvider
 
 DUMMY_OUTPUT = {
@@ -165,3 +167,15 @@ def test_compare_pages_rejects_answer_outside_schema(api_key):
 
     with pytest.raises(ProviderError):
         _provider(handler).compare_pages(_page(), _page())
+
+
+def test_classify_parses_answer_and_unknown_type(api_key):
+    form_types = load_form_types(Settings().form_types_dir)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        schema = json.loads(request.content)["generationConfig"]["responseJsonSchema"]
+        assert set(schema["required"]) == {"form_type", "sender_raw", "evidence"}
+        return httpx.Response(200, json=_answer({"form_type": "unknown", "sender_raw": None, "evidence": "x"}))
+
+    result = _provider(handler).classify([_page()], form_types)
+    assert (result.form_type, result.sender_raw) == ("unknown", None)
