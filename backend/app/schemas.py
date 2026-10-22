@@ -252,6 +252,8 @@ class FormGroup(BaseModel):
     form_reasons: list[str] = PydField(default_factory=list)
     commitment: Commitment = PydField(default_factory=Commitment)
     vlm_calls: int = PydField(default=0, ge=0, description="provider calls made to read this form, retries included")
+    finished: bool = PydField(default=False, description="reading of this form has ended (also on error); "
+                              "a progress marker for the UI")
     error: Optional[str] = PydField(default=None, description="exception type only; must not contain field values")
 
     @property

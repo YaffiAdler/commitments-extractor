@@ -8,14 +8,10 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       CE_GEMINI_MODEL: ${CE_GEMINI_MODEL:-gemini-3.8-flash}
-      CE_STORAGE: ${CE_STORAGE:-sqlite}
-      CE_DB_PATH: /var/lib/commitments-extractor/app.db
+      CE_STORAGE: memory
     # Uploads contain patient data: keep them in memory only.
     tmpfs:
       - /tmp/commitments-extractor
-    # The job database (extracted rows, no images) survives container restarts.
-    volumes:
-      - job-db:/var/lib/commitments-extractor
 
   frontend:
     build: ./frontend
@@ -25,6 +21,3 @@ services:
       BACKEND_URL: http://backend:8000
     depends_on:
       - backend
-
-volumes:
-  job-db:

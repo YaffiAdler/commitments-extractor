@@ -13,6 +13,8 @@ Page references: `P1 p5` = part 1, page 5. Quoted Hebrew is the literal text pri
 - **Central number** — a 6-digit barcode sticker with the word "מרכזי" next to it (printed vertically or horizontally), usually highlighted in yellow. On the Sheba screenshots, and on some faxes, there is no sticker and the number is handwritten.
 - **Received date** — a rectangular stamp "התקבל / המעבדה המרכזית לנגיפים / המרכז הרפואי המשולב" with a `DD -MM- YYYY` date. When there is no stamp, the date is handwritten below or next to the central number.
 
+**Commitment number pattern:** where the table below gives a fixed length (9 digits: `meuhedet_form17`, `clalit_form17`, `maccabi_online`, `leumit_lab_worklist`, `rambam_external`), the YAML has `pattern: '[0-9]{9}'` under `commitment_numbers`; a mismatch is a soft flag (`commitment_pattern_mismatch`).
+
 **Certainty:** `certain` = the layout and the location of the commitment number are clear. `uncertain` = no explicit commitment field was found, or we saw only one sample with numbers whose meaning is unclear.
 
 | ID (YAML) | Certainty | Detection (logo / title) | Name and ID number | Sender | Commitment number (kind) | Typical pages | Observed edge cases | Samples |

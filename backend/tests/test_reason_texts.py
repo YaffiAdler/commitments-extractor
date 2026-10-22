@@ -1,8 +1,15 @@
 import pytest
 
 from app.pipeline import classify, extract, normalize, ocr_check, reread
-from app.pipeline.reason_texts import REASON_TEXTS, SINGLE_READING, explain
-from app.schemas import CENTRAL_DUPLICATE, FORM_TYPE_UNKNOWN, NOT_FOUND, OPTIONAL_MISSING
+from app.pipeline.reason_texts import FORM_REASON_TEXTS, REASON_TEXTS, SINGLE_READING, explain
+from app.schemas import (
+    CENTRAL_DUPLICATE,
+    FORM_TYPE_UNKNOWN,
+    NOT_FOUND,
+    OPTIONAL_MISSING,
+    REVIEW_FORM_REASONS,
+    SPLIT_UNCERTAIN,
+)
 
 HEBREW_LETTERS = range(ord("א"), ord("ת") + 1)
 # Module constants that are not field reasons: form-level reasons and the generic form type id.
@@ -24,6 +31,11 @@ def test_every_field_reason_code_has_a_text(module):
 def test_texts_are_hebrew():
     assert all(any(ord(char) in HEBREW_LETTERS for char in text) for text in REASON_TEXTS.values())
     assert {NOT_FOUND, OPTIONAL_MISSING, SINGLE_READING} <= set(REASON_TEXTS)
+
+
+def test_every_review_form_reason_has_a_hebrew_text():
+    assert set(FORM_REASON_TEXTS) == {SPLIT_UNCERTAIN, *REVIEW_FORM_REASONS}
+    assert all(any(ord(char) in HEBREW_LETTERS for char in text) for text in FORM_REASON_TEXTS.values())
 
 
 def test_explain_keeps_order():

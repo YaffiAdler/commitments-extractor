@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from app.config import SegmentSettings
 from app.ocr.base import OcrError, OcrWord
 from app.pipeline import segment as seg
 from app.pipeline.ingest import PageImage
@@ -210,14 +211,15 @@ def test_vlm_disagreeing_with_weak_rules_flags_the_group():
 def test_vlm_answer_alone_is_flagged():
     unclear = _line(" ".join(FILLER), BODY_Y)
     result, _ = _run([unclear, unclear])
-    assert seg.WEIGHT_VLM < THRESHOLD
+    assert SegmentSettings().vlm < THRESHOLD
     assert all(SPLIT_UNCERTAIN in g.split_reasons for g in result.groups)
 
 
 def test_inconsistent_vlm_answer_is_weaker_and_noted():
     evidence = seg.Evidence()
-    seg.add_vlm_answer(evidence, PageRelation(same_form=True, reason="dummy", page_b_type="start"))
-    assert evidence.continuation[0].weight == seg.WEIGHT_VLM_INCONSISTENT
+    weights = SegmentSettings()
+    seg.add_vlm_answer(evidence, PageRelation(same_form=True, reason="dummy", page_b_type="start"), weights)
+    assert evidence.continuation[0].weight == weights.vlm_inconsistent
     assert seg.SIGNAL_VLM_INCONSISTENT in evidence.notes
 
 
@@ -297,3 +299,10 @@ def test_group_confidence_includes_the_closing_boundary():
     groups, _ = seg.group_pages("f.pdf", decisions, {0: 0, 1: 0}, THRESHOLD)
     assert [g.split_confidence for g in groups] == [0.5, 0.5]
     assert all(SPLIT_UNCERTAIN in g.split_reasons for g in groups)
+
+
+def test_weights_come_from_settings():
+    a = seg.PageFingerprint(page_no=0)
+    b = seg.PageFingerprint(page_no=1, title_form_types=frozenset({ONE_PAGE_TYPE}))
+    evidence = seg.rule_evidence(a, b, {}, SegmentSettings(title=0.42))
+    assert [(s.code, s.weight) for s in evidence.start] == [(seg.SIGNAL_TITLE, 0.42)]

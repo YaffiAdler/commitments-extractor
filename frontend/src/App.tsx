@@ -4,13 +4,16 @@ import {
   type Field,
   type FormGroup,
   type Job,
+  type JobProgress,
   SPLIT_UNCERTAIN,
   deleteJob,
   exportJob,
   getJob,
+  streamJob,
   uploadFile,
 } from './api'
 
+// Polling is the fallback when the event stream is unavailable.
 const POLL_INTERVAL_MS = 1000
 const EXPORT_FILE_NAME = 'commitments.xlsx'
 
@@ -31,11 +34,12 @@ const STATUS_TEXT: Record<Job['status'], string> = {
   failed: 'העיבוד נכשל',
 }
 
-function cell(value: Field | Field[]): { text: string; review: boolean } {
+// Mirrors Commitment.field_needs_review: an empty list field is flagged unless optional.
+function cell(value: Field | Field[], optional: boolean): { text: string; review: boolean } {
   if (Array.isArray(value)) {
     return {
       text: value.map((f) => f.value).filter(Boolean).join('; '),
-      review: value.length === 0 || value.some((f) => f.needs_review),
+      review: (value.length === 0 && !optional) || value.some((f) => f.needs_review),
     }
   }
   return { text: value.value ?? '', review: value.needs_review }
@@ -50,29 +54,74 @@ const splitUncertain = (group: FormGroup) => group.split_reasons.includes(SPLIT_
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+const isActive = (job: Job) => job.status === 'pending' || job.status === 'running'
+
+// Same numbers as the 'progress' event, for the polling fallback.
+const progressOf = (job: Job): JobProgress => ({
+  status: job.status,
+  forms_total: job.groups.length,
+  forms_done: job.groups.filter((g) => g.finished).length,
+})
+
+// Rows arrive as forms finish, in any order; keep them in page order.
+function mergeRows(groups: FormGroup[], rows: FormGroup[]): FormGroup[] {
+  const ids = new Set(rows.map((r) => r.id))
+  return [...groups.filter((g) => !ids.has(g.id)), ...rows].sort((a, b) => a.pages[0] - b.pages[0])
+}
+
 function App() {
   const [job, setJob] = useState<Job | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState<JobProgress | null>(null)
+
+  async function pollJob(jobId: string) {
+    let current = await getJob(jobId)
+    setJob(current)
+    setProgress(progressOf(current))
+    while (isActive(current)) {
+      await sleep(POLL_INTERVAL_MS)
+      current = await getJob(jobId)
+      setJob(current)
+      setProgress(progressOf(current))
+    }
+  }
+
+  async function followJob(jobId: string) {
+    try {
+      const finished = await streamJob(jobId, {
+        onProgress: (p) => {
+          setProgress(p)
+          setJob((current) => current && { ...current, status: p.status })
+        },
+        onRows: (rows) => setJob((current) => current && { ...current, groups: mergeRows(current.groups, rows) }),
+      })
+      setJob(finished)
+      setProgress(progressOf(finished))
+    } catch {
+      // Not an error to show: polling reports a real failure (HTTP status) itself.
+      await pollJob(jobId)
+    }
+  }
 
   async function handleUpload(file: File) {
     setError(null)
     setBusy(true)
+    setProgress(null)
     try {
       if (job) await deleteJob(job.id)
-      let current = await uploadFile(file)
-      setJob(current)
-      while (current.status === 'pending' || current.status === 'running') {
-        await sleep(POLL_INTERVAL_MS)
-        current = await getJob(current.id)
-        setJob(current)
-      }
+      const created = await uploadFile(file)
+      setJob(created)
+      if (isActive(created)) await followJob(created.id)
     } catch (e) {
       setError(`ההעלאה נכשלה (${(e as Error).message})`)
     } finally {
       setBusy(false)
     }
   }
+
+  // Only forms whose reading finished (polling also returns the unfinished ones).
+  const rows = job?.groups.filter((g) => g.finished) ?? []
 
   async function handleExport() {
     if (!job) return
@@ -111,11 +160,16 @@ function App() {
           ייצוא לאקסל
         </button>
         {job && <span>{STATUS_TEXT[job.status]}</span>}
+        {job && isActive(job) && progress && progress.forms_total > 0 && (
+          <span>
+            {progress.forms_done}/{progress.forms_total} טפסים
+          </span>
+        )}
       </section>
 
       {error && <p className="error">{error}</p>}
 
-      {job && job.groups.length > 0 && (
+      {rows.length > 0 && (
         <table>
           <thead>
             <tr>
@@ -127,10 +181,13 @@ function App() {
             </tr>
           </thead>
           <tbody>
-            {job.groups.map((group) => (
+            {rows.map((group) => (
               <tr key={group.id}>
                 {COLUMNS.map((c) => {
-                  const { text, review } = cell(group.commitment[c.key] as Field | Field[])
+                  const { text, review } = cell(
+                    group.commitment[c.key] as Field | Field[],
+                    group.commitment.optional_fields.includes(c.key),
+                  )
                   return (
                     <td key={c.key} className={review ? 'review' : undefined}>
                       {text}

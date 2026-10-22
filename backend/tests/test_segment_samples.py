@@ -52,10 +52,10 @@ def test_sample_split(file_name, settings_and_ocr):
     if not path.exists():
         pytest.skip("samples/ is not available")
     settings, ocr = settings_and_ocr
-    pages = [preprocess.preprocess(p, settings.preprocess, ocr) for p in ingest.load_file(path)]
+    pages = [preprocess.preprocess(p, settings.preprocess, ocr) for p in ingest.load_file(path, ingest.IngestLimits.from_settings(settings))]
     provider = CountingProvider()
     result = segment.segment(pages, ocr, load_form_types(settings.form_types_dir), provider,
-                             settings.review_threshold)
+                             settings.review_threshold, settings.segment)
 
     page_count, form_count = EXPECTED[file_name]
     assert len(pages) == page_count

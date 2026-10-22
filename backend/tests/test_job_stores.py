@@ -170,6 +170,6 @@ def test_factory_follows_setting(monkeypatch, tmp_path, name, cls):
     assert isinstance(create_job_store(Settings(), TempStorage(tmp_path)), cls)
 
 
-def test_default_storage_is_sqlite(monkeypatch):
+def test_default_storage_is_memory(monkeypatch):
     monkeypatch.delenv("CE_STORAGE")
-    assert Settings().storage is StorageName.SQLITE
+    assert Settings().storage is StorageName.MEMORY

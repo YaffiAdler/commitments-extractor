@@ -1,0 +1,13 @@
+# Local development only: keep jobs in SQLite across container restarts.
+#   docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up --build
+# The database holds patient data (extracted rows, no images); remove the volume to wipe it.
+services:
+  backend:
+    environment:
+      CE_STORAGE: sqlite
+      CE_DB_PATH: /var/lib/commitments-extractor/app.db
+    volumes:
+      - job-db:/var/lib/commitments-extractor
+
+volumes:
+  job-db:

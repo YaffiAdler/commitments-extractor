@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.config import Settings  # noqa: E402
 from app.ocr import create_ocr_engine  # noqa: E402
-from app.pipeline.ingest import PageImage, load_file  # noqa: E402
+from app.pipeline.ingest import IngestLimits, PageImage, load_file  # noqa: E402
 from app.pipeline.preprocess import preprocess  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("variants", ROOT / "scripts" / "make_synthetic_variants.py")
@@ -57,7 +57,7 @@ def _write_png(path: pathlib.Path, image: np.ndarray) -> None:
 
 def _pages(args: argparse.Namespace) -> list[tuple[str, PageImage]]:
     if args.pdf:
-        pages = load_file(pathlib.Path(args.pdf))
+        pages = load_file(pathlib.Path(args.pdf), IngestLimits.from_settings(Settings()))
         wanted = [int(n) for n in args.pages.split(",")]
         return [(f"page_{n:02d}", pages[n - 1]) for n in wanted]
     form = variants.dummy_form()

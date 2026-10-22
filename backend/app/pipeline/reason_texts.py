@@ -8,7 +8,14 @@ Hebrew; they describe the check, never the value.
 from __future__ import annotations
 
 from app.pipeline import classify, extract, normalize, ocr_check, reread
-from app.schemas import NOT_FOUND, OPTIONAL_MISSING
+from app.schemas import (
+    CENTRAL_DUPLICATE,
+    EXTRACTION_FAILED,
+    FORM_TYPE_UNKNOWN,
+    NOT_FOUND,
+    OPTIONAL_MISSING,
+    SPLIT_UNCERTAIN,
+)
 
 SINGLE_READING = "single_reading"  # set by the confidence stage: no independent reading confirmed the value
 
@@ -48,6 +55,14 @@ REASON_TEXTS: dict[str, str] = {
     classify.SENDER_FUZZY_MATCH: "הגורם השולח הותאם לרשימה בהתאמה חלקית",
     classify.SENDER_READINGS_AGREE: "שתי קריאות של הגורם השולח הסכימו",
     classify.SENDER_READINGS_DISAGREE: "הגורם השולח נבדל בין שתי הקריאות",
+}
+
+# Reasons about a form as a whole (``FormGroup.split_reasons`` / ``form_reasons``) that put it in review.
+FORM_REASON_TEXTS: dict[str, str] = {
+    SPLIT_UNCERTAIN: "ייתכן שפוצל לא נכון (גבולות הטופס בין העמודים אינם ודאיים)",
+    FORM_TYPE_UNKNOWN: "סוג הטופס לא זוהה; נקרא בהנחיות כלליות",
+    EXTRACTION_FAILED: "קריאת הטופס נכשלה",
+    CENTRAL_DUPLICATE: "אותו מספר מרכזי מופיע גם בטופס אחר בעבודה זו",
 }
 
 _CANDIDATE_TEXT = "מועמד אפשרי: {name} (התאמה {score})"

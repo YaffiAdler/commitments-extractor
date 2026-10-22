@@ -92,9 +92,9 @@ def suggestion(match: SenderMatch) -> str:
 
 def classify_file(path: Path, settings: Settings, form_types: dict[str, FormType], generic: FormType,
                   matcher: SenderMatcher, provider, ocr, limit: int | None) -> list[Row]:
-    pages = [preprocess.preprocess(p, settings.preprocess, ocr) for p in islice(ingest.load_file(path), limit)]
+    pages = [preprocess.preprocess(p, settings.preprocess, ocr) for p in islice(ingest.load_file(path, ingest.IngestLimits.from_settings(settings)), limit)]
     by_page_no = {page.page_no: page for page in pages}
-    result = segment.segment(pages, ocr, form_types, provider, settings.review_threshold)
+    result = segment.segment(pages, ocr, form_types, provider, settings.review_threshold, settings.segment)
     part = file_part(path.name)
     expected = expected_form_types(form_types)
     rows = []

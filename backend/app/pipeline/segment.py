@@ -10,8 +10,8 @@ three steps:
    marker such as "2/2", the number of words and the share of ink.
 2. **Rules** turn the fingerprints of pages A and B into signals for "B
    starts a new form" and "B continues A"; each side is scored as
-   ``1 - prod(1 - weight)`` over its signals and the boundary confidence is
-   ``winner * (1 - loser)``.
+   ``1 - prod(1 - weight)`` over its signals (weights: ``config.SegmentSettings``)
+   and the boundary confidence is ``winner * (1 - loser)``.
 3. **Vision model**, only where the rules stay below the review threshold:
    the pair is sent to ``ExtractionProvider.compare_pages`` and the answer
    is added as one more signal. It can also mark B irrelevant; such pages
@@ -35,6 +35,7 @@ from enum import Enum
 import numpy as np
 from rapidfuzz import fuzz
 
+from app.config import SegmentSettings
 from app.imaging.illumination import binarize
 from app.ocr.base import OcrEngine, OcrError, OcrWord
 from app.pipeline.ingest import PageImage
@@ -67,21 +68,6 @@ _PAGE_WORD_MARKER = re.compile(r"(?:page|עמוד)\s+(\d)\s+(?:of|מתוך)\s+(\
 SPARSE_MAX_WORDS = 15
 SPARSE_MAX_INK = 0.01
 
-# Weight of each signal (how often it is right on its own).
-WEIGHT_TITLE = 0.9
-WEIGHT_NEW_CENTRAL_NUMBER = 0.9
-WEIGHT_UNREAD_CENTRAL_STICKER = 0.6
-WEIGHT_RECEIVED_STAMP = 0.8
-WEIGHT_SAME_CENTRAL_NUMBER = 0.9
-WEIGHT_PAGE_MARKER = 0.9
-WEIGHT_PAGE_MARKER_PAIR = 0.99
-WEIGHT_FIRST_OF_SEVERAL = 0.6
-WEIGHT_SPARSE_PAGE = 0.9
-WEIGHT_PREVIOUS_FORM_LENGTH = 0.7
-# Below the default review threshold (0.85) on purpose: the model's answer
-# alone never clears a boundary; it must agree with at least one rule.
-WEIGHT_VLM = 0.8
-WEIGHT_VLM_INCONSISTENT = 0.5
 FIRST_PAGE_CONFIDENCE = 1.0
 
 # Signal codes, stored in FormGroup.split_reasons.
@@ -261,30 +247,31 @@ def fingerprint(page: PageImage, ocr: OcrEngine | None, keywords: dict[str, list
 # --- Rules --------------------------------------------------------------------
 
 
-def _central_signal(a: PageFingerprint, b: PageFingerprint) -> tuple[str, Signal] | None:
+def _central_signal(a: PageFingerprint, b: PageFingerprint, weights: SegmentSettings) -> tuple[str, Signal] | None:
     if not b.central_sticker:
         return None
     if not b.central_numbers:
-        return "start", Signal(SIGNAL_UNREAD_CENTRAL_STICKER, WEIGHT_UNREAD_CENTRAL_STICKER)
+        return "start", Signal(SIGNAL_UNREAD_CENTRAL_STICKER, weights.unread_central_sticker)
     if b.central_numbers <= a.central_numbers:
-        return "continuation", Signal(SIGNAL_SAME_CENTRAL_NUMBER, WEIGHT_SAME_CENTRAL_NUMBER)
-    return "start", Signal(SIGNAL_NEW_CENTRAL_NUMBER, WEIGHT_NEW_CENTRAL_NUMBER)
+        return "continuation", Signal(SIGNAL_SAME_CENTRAL_NUMBER, weights.same_central_number)
+    return "start", Signal(SIGNAL_NEW_CENTRAL_NUMBER, weights.new_central_number)
 
 
-def _marker_signal(a: PageFingerprint, b: PageFingerprint) -> tuple[str, Signal] | None:
+def _marker_signal(a: PageFingerprint, b: PageFingerprint, weights: SegmentSettings) -> tuple[str, Signal] | None:
     if b.page_marker is not None:
         page, pages = b.page_marker
         if page == 1:
-            return "start", Signal(SIGNAL_PAGE_MARKER, WEIGHT_PAGE_MARKER)
+            return "start", Signal(SIGNAL_PAGE_MARKER, weights.page_marker)
         follows_a = a.page_marker == (page - 1, pages)
-        return "continuation", Signal(SIGNAL_PAGE_MARKER, WEIGHT_PAGE_MARKER_PAIR if follows_a else WEIGHT_PAGE_MARKER)
+        weight = weights.page_marker_pair if follows_a else weights.page_marker
+        return "continuation", Signal(SIGNAL_PAGE_MARKER, weight)
     if a.page_marker is not None and a.page_marker[0] < a.page_marker[1]:
-        return "continuation", Signal(SIGNAL_FIRST_OF_SEVERAL, WEIGHT_FIRST_OF_SEVERAL)
+        return "continuation", Signal(SIGNAL_FIRST_OF_SEVERAL, weights.first_of_several)
     return None
 
 
 def _form_length_signal(a: PageFingerprint, b: PageFingerprint,
-                        typical_pages: dict[str, int]) -> tuple[str, Signal] | None:
+                        typical_pages: dict[str, int], weights: SegmentSettings) -> tuple[str, Signal] | None:
     """``pages.typical`` of the form type(s) whose title is on page A, when
     they agree and B carries no page marker of its own. A multi-page type
     does not suggest a continuation if B has the title of another type."""
@@ -292,23 +279,25 @@ def _form_length_signal(a: PageFingerprint, b: PageFingerprint,
     if len(lengths) != 1 or b.page_marker is not None:
         return None
     if lengths == {1}:
-        return "start", Signal(SIGNAL_PREVIOUS_FORM_ONE_PAGE, WEIGHT_PREVIOUS_FORM_LENGTH)
+        return "start", Signal(SIGNAL_PREVIOUS_FORM_ONE_PAGE, weights.previous_form_length)
     if b.title_form_types and not b.title_form_types & a.title_form_types:
         return None
-    return "continuation", Signal(SIGNAL_PREVIOUS_FORM_MULTI_PAGE, WEIGHT_PREVIOUS_FORM_LENGTH)
+    return "continuation", Signal(SIGNAL_PREVIOUS_FORM_MULTI_PAGE, weights.previous_form_length)
 
 
-def rule_evidence(a: PageFingerprint, b: PageFingerprint, typical_pages: dict[str, int]) -> Evidence:
+def rule_evidence(a: PageFingerprint, b: PageFingerprint, typical_pages: dict[str, int],
+                  weights: SegmentSettings) -> Evidence:
     """Signals for the boundary between adjacent pages A and B;
     ``typical_pages`` maps form type ids to ``pages.typical``."""
     evidence = Evidence(notes=sorted({p for p in (a.ocr_problem, b.ocr_problem) if p}))
     if b.title_form_types:
-        evidence.start.append(Signal(SIGNAL_TITLE, WEIGHT_TITLE))
+        evidence.start.append(Signal(SIGNAL_TITLE, weights.title))
     if b.received_stamp:
-        evidence.start.append(Signal(SIGNAL_RECEIVED_STAMP, WEIGHT_RECEIVED_STAMP))
+        evidence.start.append(Signal(SIGNAL_RECEIVED_STAMP, weights.received_stamp))
     if b.sparse:
-        evidence.continuation.append(Signal(SIGNAL_SPARSE_PAGE, WEIGHT_SPARSE_PAGE))
-    for found in (_central_signal(a, b), _marker_signal(a, b), _form_length_signal(a, b, typical_pages)):
+        evidence.continuation.append(Signal(SIGNAL_SPARSE_PAGE, weights.sparse_page))
+    for found in (_central_signal(a, b, weights), _marker_signal(a, b, weights),
+                  _form_length_signal(a, b, typical_pages, weights)):
         if found is not None:
             side, signal = found
             getattr(evidence, side).append(signal)
@@ -318,14 +307,14 @@ def rule_evidence(a: PageFingerprint, b: PageFingerprint, typical_pages: dict[st
 # --- Vision model -------------------------------------------------------------
 
 
-def add_vlm_answer(evidence: Evidence, relation: PageRelation) -> Boundary | None:
+def add_vlm_answer(evidence: Evidence, relation: PageRelation, weights: SegmentSettings) -> Boundary | None:
     """Add the model's answer as a signal; returns IRRELEVANT if it says page
     B belongs to no form (that answer is taken as is), else None."""
     if relation.page_b_type == Boundary.IRRELEVANT.value:
         evidence.notes.append(SIGNAL_VLM_IRRELEVANT)
         return Boundary.IRRELEVANT
     consistent = relation.same_form == (relation.page_b_type == Boundary.CONTINUATION.value)
-    weight = WEIGHT_VLM if consistent else WEIGHT_VLM_INCONSISTENT
+    weight = weights.vlm if consistent else weights.vlm_inconsistent
     if not consistent:
         evidence.notes.append(SIGNAL_VLM_INCONSISTENT)
     if relation.same_form:
@@ -337,13 +326,13 @@ def add_vlm_answer(evidence: Evidence, relation: PageRelation) -> Boundary | Non
 
 def decide_boundary(page_a: PageImage, page_b: PageImage, a: PageFingerprint, b: PageFingerprint,
                     typical_pages: dict[str, int], provider: ExtractionProvider,
-                    threshold: float) -> BoundaryDecision:
-    evidence = rule_evidence(a, b, typical_pages)
+                    threshold: float, weights: SegmentSettings) -> BoundaryDecision:
+    evidence = rule_evidence(a, b, typical_pages, weights)
     boundary, confidence = evidence.decision()
     if confidence >= threshold:
         return BoundaryDecision(b.page_no, boundary, confidence, tuple(evidence.codes()), used_vlm=False)
-    if add_vlm_answer(evidence, provider.compare_pages(page_a, page_b)) is Boundary.IRRELEVANT:
-        return BoundaryDecision(b.page_no, Boundary.IRRELEVANT, WEIGHT_VLM, tuple(evidence.codes()), used_vlm=True)
+    if add_vlm_answer(evidence, provider.compare_pages(page_a, page_b), weights) is Boundary.IRRELEVANT:
+        return BoundaryDecision(b.page_no, Boundary.IRRELEVANT, weights.vlm, tuple(evidence.codes()), used_vlm=True)
     boundary, confidence = evidence.decision()
     return BoundaryDecision(b.page_no, boundary, confidence, tuple(evidence.codes()), used_vlm=True)
 
@@ -398,8 +387,11 @@ def _first_page(page: PageImage, reasons: tuple[str, ...] = ()) -> BoundaryDecis
 
 
 def segment(pages: list[PageImage], ocr: OcrEngine | None, form_types: dict[str, FormType],
-            provider: ExtractionProvider, threshold: float) -> Segmentation:
+            provider: ExtractionProvider, threshold: float,
+            weights: SegmentSettings | None = None) -> Segmentation:
     """Group the pages of one file into forms (see the module docstring).
+
+    ``weights`` default to ``SegmentSettings()`` (the ``CE_SEGMENT_WEIGHT_*`` env vars).
 
     A single-page file is one form without OCR or model calls.
     """
@@ -411,13 +403,14 @@ def segment(pages: list[PageImage], ocr: OcrEngine | None, form_types: dict[str,
         groups, _ = group_pages(source_file, [_first_page(pages[0], (SINGLE_PAGE,))], rotations, threshold)
         return Segmentation(groups=groups)
 
+    weights = weights or SegmentSettings()
     keywords = title_keywords(form_types)
     typical_pages = {form_id: form_type.pages.typical for form_id, form_type in form_types.items()}
     prints = [fingerprint(p, ocr, keywords) for p in pages]
     decisions = [_first_page(pages[0])]
     for i in range(1, len(pages)):
         decisions.append(decide_boundary(pages[i - 1], pages[i], prints[i - 1], prints[i],
-                                         typical_pages, provider, threshold))
+                                         typical_pages, provider, threshold, weights))
     groups, irrelevant = group_pages(source_file, decisions, rotations, threshold)
     vlm_calls = sum(d.used_vlm for d in decisions)
     logger.info("file %s: %d pages -> %d forms, %d irrelevant, %d VLM calls for %d boundaries",

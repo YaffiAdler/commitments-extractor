@@ -13,6 +13,7 @@ export interface Commitment {
   received_date: Field
   sender: Field
   commitment_numbers: Field[]
+  optional_fields: string[]
 }
 
 export const SPLIT_UNCERTAIN = 'split_uncertain'
@@ -23,6 +24,8 @@ export interface FormGroup {
   split_confidence: number
   split_reasons: string[]
   commitment: Commitment
+  // Reading of this form has ended; unfinished forms are listed while a job runs.
+  finished: boolean
 }
 
 export interface IrrelevantPage {
@@ -41,7 +44,9 @@ export interface Job {
   error: string | null
 }
 
-const API = '/api'
+// Same-origin '/api' goes through the Vite dev proxy; a deployed frontend (Vercel)
+// sets VITE_API_URL to the backend URL, which must list it in CE_ALLOWED_ORIGINS.
+const API = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 
 async function checked(response: Response): Promise<Response> {
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -57,6 +62,46 @@ export async function uploadFile(file: File): Promise<Job> {
 
 export async function getJob(jobId: string): Promise<Job> {
   return (await checked(await fetch(`${API}/jobs/${jobId}`))).json()
+}
+
+// Mirrors backend/app/events.py.
+export interface JobProgress {
+  status: JobStatus
+  forms_total: number
+  forms_done: number
+}
+
+export interface JobStreamHandlers {
+  onProgress: (progress: JobProgress) => void
+  // Forms whose reading finished since the previous call, each sent once.
+  onRows: (rows: FormGroup[]) => void
+}
+
+// Follows GET /jobs/{id}/events. Resolves with the finished job ('end' event).
+// Rejects if EventSource is missing, the job is gone, or the stream breaks
+// before the end; the caller then falls back to polling.
+export function streamJob(jobId: string, handlers: JobStreamHandlers): Promise<Job> {
+  return new Promise((resolve, reject) => {
+    if (typeof EventSource === 'undefined') {
+      reject(new Error('EventSource is not supported'))
+      return
+    }
+    const source = new EventSource(`${API}/jobs/${jobId}/events`)
+    const data = (event: Event) => JSON.parse((event as MessageEvent<string>).data)
+    const fail = (message: string) => {
+      source.close()
+      reject(new Error(message))
+    }
+    source.addEventListener('progress', (event) => handlers.onProgress(data(event)))
+    source.addEventListener('rows', (event) => handlers.onRows(data(event)))
+    source.addEventListener('end', (event) => {
+      source.close()
+      resolve(data(event))
+    })
+    source.addEventListener('missing', () => fail('job not found'))
+    // Without close() the browser would reconnect on its own; polling takes over instead.
+    source.onerror = () => fail('event stream failed')
+  })
 }
 
 export async function exportJob(jobId: string): Promise<Blob> {

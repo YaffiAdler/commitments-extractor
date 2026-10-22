@@ -18,9 +18,12 @@ frontend/dist/
 # Env / secrets
 .env
 .env.*
+!.env.example
 
 # Outputs
 *.xlsx
+# dummy data from the fake provider only (scripts/make_sample_output.py)
+!docs/sample_output.xlsx
 eval/report.md
 eval/classify_report.md
 eval/extract_report.md

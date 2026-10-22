@@ -177,3 +177,24 @@ def test_a_single_form_is_not_a_duplicate(tmp_path, monkeypatch):
     monkeypatch.setenv("CE_RENDER_DPI", "72")
     job = _orchestrator(monkeypatch).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 1)])
     assert CENTRAL_DUPLICATE not in job.groups[0].form_reasons
+
+
+def test_progress_is_reported_after_segmentation_and_each_form(tmp_path, monkeypatch):
+    snapshots = []
+    job = _orchestrator(monkeypatch).run(
+        Job(), [_blank_pdf(tmp_path / "f.pdf", 2)],
+        on_progress=lambda j: snapshots.append([g.finished for g in j.groups]))
+    # First call: both forms known, none read; then one call per finished form.
+    assert snapshots[0] == [False, False]
+    assert len(snapshots) == 3 and sorted(snapshots[1]) == [False, True] and snapshots[2] == [True, True]
+    assert all(g.finished for g in job.groups)
+
+
+def test_a_failed_form_is_finished_too(tmp_path, monkeypatch):
+    class FailingProvider(FakeProvider):
+        def extract_form(self, pages, form_type):
+            raise ProviderError("dummy")
+
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    job = _build(FailingProvider()).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 1)])
+    assert job.groups[0].error and job.groups[0].finished

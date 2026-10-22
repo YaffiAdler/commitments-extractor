@@ -13,6 +13,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ENV_PREFIX = "CE_"
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
 class ProviderName(str, Enum):
@@ -27,8 +28,8 @@ class ProviderName(str, Enum):
 class StorageName(str, Enum):
     """Available job stores (see ``app/storage``)."""
 
-    SQLITE = "sqlite"  # survives a server restart
-    MEMORY = "memory"  # lost on restart
+    MEMORY = "memory"  # default: no state on disk, lost on restart
+    SQLITE = "sqlite"  # local use only: survives a server restart
 
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -37,6 +38,11 @@ _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(ENV_PREFIX + name.upper(), default)
+
+
+def _env_list(name: str) -> tuple[str, ...]:
+    """A comma-separated variable as a tuple; blanks are dropped, so unset or empty -> ``()``."""
+    return tuple(item.strip() for item in _env(name, "").split(",") if item.strip())
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -132,6 +138,71 @@ class ConfidenceSettings:
                 raise ValueError(f"confidence {name} must be between 0 and 1")
 
 
+def _segment_weight(name: str, default: str) -> float:
+    return _env_float(f"segment_weight_{name}", default)
+
+
+@dataclass(frozen=True)
+class SegmentSettings:
+    """Weight of each page-boundary signal (``app/pipeline/segment.py``): how
+    often the signal is right on its own. Hand-chosen, not calibrated.
+    ``Settings`` keeps ``vlm`` below its ``review_threshold``, so the model's
+    answer alone never clears a boundary.
+    """
+
+    title: float = field(default_factory=lambda: _segment_weight("title", "0.9"))
+    new_central_number: float = field(default_factory=lambda: _segment_weight("new_central_number", "0.9"))
+    unread_central_sticker: float = field(default_factory=lambda: _segment_weight("unread_central_sticker", "0.6"))
+    received_stamp: float = field(default_factory=lambda: _segment_weight("received_stamp", "0.8"))
+    same_central_number: float = field(default_factory=lambda: _segment_weight("same_central_number", "0.9"))
+    page_marker: float = field(default_factory=lambda: _segment_weight("page_marker", "0.9"))
+    # "2/2" right after "1/2".
+    page_marker_pair: float = field(default_factory=lambda: _segment_weight("page_marker_pair", "0.99"))
+    first_of_several: float = field(default_factory=lambda: _segment_weight("first_of_several", "0.6"))
+    sparse_page: float = field(default_factory=lambda: _segment_weight("sparse_page", "0.9"))
+    previous_form_length: float = field(default_factory=lambda: _segment_weight("previous_form_length", "0.7"))
+    vlm: float = field(default_factory=lambda: _segment_weight("vlm", "0.8"))
+    # The model's answer contradicts itself (same_form vs. page_b_type).
+    vlm_inconsistent: float = field(default_factory=lambda: _segment_weight("vlm_inconsistent", "0.5"))
+
+    def __post_init__(self) -> None:
+        for name, value in vars(self).items():
+            if not 0.0 <= value < 1.0:
+                raise ValueError(f"segment weight {name} must be in [0, 1)")
+
+
+class MultiValueMode(str, Enum):
+    """How the list fields (central / commitment numbers) are written to Excel."""
+
+    JOINED = "joined"    # one cell, values separated by "; "
+    COLUMNS = "columns"  # one cell per value, as many columns as the longest list in the job
+
+
+# Column keys the Excel export knows (``app/export/xlsx.py`` maps them to Hebrew headers).
+EXPORT_COLUMN_KEYS = ("first_name", "last_name", "id_number", "central_numbers", "received_date", "sender",
+                      "commitment_numbers", "review_notes", "source_file", "pages")
+# All but ``pages`` (1-based page numbers of the form inside its file), which is opt-in.
+DEFAULT_EXPORT_COLUMNS = tuple(key for key in EXPORT_COLUMN_KEYS if key != "pages")
+
+
+@dataclass(frozen=True)
+class ExportSettings:
+    """Layout of the Excel export (``app/export/xlsx.py``)."""
+
+    # Comma-separated column keys, in order (any subset of ``EXPORT_COLUMN_KEYS``).
+    columns: tuple[str, ...] = field(
+        default_factory=lambda: _env_list("export_columns") or DEFAULT_EXPORT_COLUMNS)
+    multi_values: MultiValueMode = field(
+        default_factory=lambda: MultiValueMode(_env("export_multi_values", MultiValueMode.JOINED.value)))
+
+    def __post_init__(self) -> None:
+        unknown = [key for key in self.columns if key not in EXPORT_COLUMN_KEYS]
+        if unknown:
+            raise ValueError(f"unknown export columns {unknown}; known: {', '.join(EXPORT_COLUMN_KEYS)}")
+        if len(set(self.columns)) != len(self.columns):
+            raise ValueError("export columns must not repeat")
+
+
 @dataclass(frozen=True)
 class Settings:
     form_types_dir: Path = field(default_factory=lambda: Path(_env("form_types_dir", str(BACKEND_DIR / "form_types"))))
@@ -154,18 +225,30 @@ class Settings:
     # A form boundary scoring below this is flagged ``split_uncertain`` (fields: ``confidence.review_threshold``).
     review_threshold: float = field(default_factory=lambda: float(_env("review_threshold", "0.85")))
 
-    storage: StorageName = field(default_factory=lambda: StorageName(_env("storage", StorageName.SQLITE.value)))
-    # Holds patient data: keep it on a protected disk, never in the repository.
+    storage: StorageName = field(default_factory=lambda: StorageName(_env("storage", StorageName.MEMORY.value)))
+    # Only used with ``storage=sqlite``. Holds patient data: keep it on a protected disk, never in the repository.
     db_path: Path = field(default_factory=lambda: Path(_env("db_path", str(BACKEND_DIR / "data" / "app.db"))))
 
     # Jobs and their files are deleted this many seconds after creation.
     job_ttl_s: int = field(default_factory=lambda: int(_env("job_ttl_s", "3600")))
     max_upload_mb: int = field(default_factory=lambda: int(_env("max_upload_mb", "50")))
     max_pages: int = field(default_factory=lambda: int(_env("max_pages", "200")))
+    # Pixels per page image (width x height); also set as PIL's ``Image.MAX_IMAGE_PIXELS``.
+    # 50M covers A3 at 400 DPI and keeps one RGB copy around 150 MB.
+    max_image_pixels: int = field(default_factory=lambda: int(_env("max_image_pixels", "50000000")))
+    # Jobs processed at once; further uploads wait as ``pending``.
+    max_concurrent_jobs: int = field(default_factory=lambda: int(_env("max_concurrent_jobs", "2")))
+    # Level of the app's logs on stdout (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+    log_level: str = field(default_factory=lambda: _env("log_level", "INFO").strip().upper())
+    # Browser origins allowed to call the API (e.g. the Vercel frontend), comma-separated.
+    # Empty = no CORS headers at all (same-origin use, e.g. through the Vite proxy).
+    allowed_origins: tuple[str, ...] = field(default_factory=lambda: _env_list("allowed_origins"))
 
     preprocess: PreprocessSettings = field(default_factory=PreprocessSettings)
     extraction: ExtractionSettings = field(default_factory=ExtractionSettings)
     confidence: ConfidenceSettings = field(default_factory=ConfidenceSettings)
+    segment: SegmentSettings = field(default_factory=SegmentSettings)
+    export: ExportSettings = field(default_factory=ExportSettings)
     # Empty = find ``tesseract`` on PATH.
     tesseract_cmd: str = field(default_factory=lambda: _env("tesseract_cmd", ""))
     ocr_languages: str = field(default_factory=lambda: _env("ocr_languages", "heb+eng"))
@@ -177,7 +260,11 @@ class Settings:
         if min(self.claude_timeout_s, self.gemini_timeout_s, self.local_vlm_timeout_s, self.ocr_timeout_s,
                self.job_ttl_s) <= 0:
             raise ValueError("timeouts and TTL must be positive")
-        if self.max_upload_mb <= 0 or self.max_pages <= 0:
-            raise ValueError("upload and page limits must be positive")
+        if min(self.max_upload_mb, self.max_pages, self.max_image_pixels, self.max_concurrent_jobs) <= 0:
+            raise ValueError("upload, page, pixel and job limits must be positive")
         if not 0.0 <= self.review_threshold <= 1.0:
             raise ValueError("review_threshold must be between 0 and 1")
+        if self.segment.vlm >= self.review_threshold:
+            raise ValueError("segment weight vlm must stay below review_threshold")
+        if self.log_level not in LOG_LEVELS:
+            raise ValueError(f"log_level must be one of {', '.join(LOG_LEVELS)}")

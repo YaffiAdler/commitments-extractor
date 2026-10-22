@@ -1,6 +1,6 @@
 import pytest
 
-from app.config import ConfidenceSettings, ProviderName, Settings
+from app.config import DEFAULT_EXPORT_COLUMNS, ConfidenceSettings, MultiValueMode, ProviderName, SegmentSettings, Settings
 
 
 def test_defaults_are_valid():
@@ -13,6 +13,7 @@ def test_defaults_are_valid():
 def test_env_override(monkeypatch):
     monkeypatch.setenv("CE_PROVIDER", "local_vlm")
     monkeypatch.setenv("CE_REVIEW_THRESHOLD", "0.5")
+    monkeypatch.setenv("CE_SEGMENT_WEIGHT_VLM", "0.4")  # must stay below the split threshold
     settings = Settings()
     assert settings.provider is ProviderName.LOCAL_VLM
     assert settings.review_threshold == 0.5
@@ -64,3 +65,77 @@ def test_confidence_weights_from_env(monkeypatch):
 def test_confidence_weights_must_be_in_range(name):
     with pytest.raises(ValueError):
         ConfidenceSettings(**{name: 1.5})
+
+
+def test_allowed_origins_default_empty(monkeypatch):
+    monkeypatch.delenv("CE_ALLOWED_ORIGINS", raising=False)
+    assert Settings().allowed_origins == ()
+
+
+def test_allowed_origins_comma_separated(monkeypatch):
+    monkeypatch.setenv("CE_ALLOWED_ORIGINS", " https://a.example.org , ,https://b.example.org,")
+    assert Settings().allowed_origins == ("https://a.example.org", "https://b.example.org")
+
+
+def test_segment_weight_defaults():
+    weights = Settings().segment
+    assert (weights.title, weights.page_marker_pair, weights.vlm, weights.vlm_inconsistent) == (0.9, 0.99, 0.8, 0.5)
+
+
+def test_segment_weights_from_env(monkeypatch):
+    monkeypatch.setenv("CE_SEGMENT_WEIGHT_SPARSE_PAGE", "0.75")
+    assert Settings().segment.sparse_page == 0.75
+
+
+@pytest.mark.parametrize("value", ["-0.1", "1.0"])
+def test_segment_weights_must_be_in_range(monkeypatch, value):
+    monkeypatch.setenv("CE_SEGMENT_WEIGHT_TITLE", value)
+    with pytest.raises(ValueError):
+        SegmentSettings()
+
+
+def test_vlm_weight_must_stay_below_split_threshold(monkeypatch):
+    monkeypatch.setenv("CE_SEGMENT_WEIGHT_VLM", "0.85")
+    with pytest.raises(ValueError, match="vlm"):
+        Settings()
+
+
+def test_job_limits_and_log_level(monkeypatch):
+    monkeypatch.setenv("CE_MAX_CONCURRENT_JOBS", "3")
+    monkeypatch.setenv("CE_MAX_IMAGE_PIXELS", "1000")
+    monkeypatch.setenv("CE_LOG_LEVEL", "debug")
+    settings = Settings()
+    assert (settings.max_concurrent_jobs, settings.max_image_pixels, settings.log_level) == (3, 1000, "DEBUG")
+
+
+@pytest.mark.parametrize("name, value", [("CE_MAX_CONCURRENT_JOBS", "0"), ("CE_MAX_IMAGE_PIXELS", "0"),
+                                         ("CE_LOG_LEVEL", "LOUD")])
+def test_invalid_job_limits_and_log_level_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError):
+        Settings()
+
+
+def test_export_defaults(monkeypatch):
+    monkeypatch.delenv("CE_EXPORT_COLUMNS", raising=False)
+    monkeypatch.delenv("CE_EXPORT_MULTI_VALUES", raising=False)
+    export = Settings().export
+    assert export.columns == DEFAULT_EXPORT_COLUMNS
+    assert "pages" not in export.columns
+    assert export.multi_values is MultiValueMode.JOINED
+
+
+def test_export_settings_from_env(monkeypatch):
+    monkeypatch.setenv("CE_EXPORT_COLUMNS", "id_number, central_numbers,pages")
+    monkeypatch.setenv("CE_EXPORT_MULTI_VALUES", "columns")
+    export = Settings().export
+    assert export.columns == ("id_number", "central_numbers", "pages")
+    assert export.multi_values is MultiValueMode.COLUMNS
+
+
+@pytest.mark.parametrize("name, value", [("CE_EXPORT_COLUMNS", "id_number,unknown"),
+                                         ("CE_EXPORT_MULTI_VALUES", "rows")])
+def test_invalid_export_settings_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError):
+        Settings()

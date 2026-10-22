@@ -6,7 +6,8 @@ from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
 from app.config import Settings
-from app.export.xlsx import COLUMNS
+from app.config import ExportSettings
+from app.export.xlsx import HEADERS
 from app.main import create_app
 from app.providers import fake
 from app.providers.fake import FakeProvider
@@ -36,7 +37,7 @@ def test_upload_to_xlsx(tmp_path, monkeypatch):
     assert exported.status_code == 200
     sheet = load_workbook(BytesIO(exported.content)).active
     rows = list(sheet.iter_rows(values_only=True))
-    assert rows[0][: len(COLUMNS)] == tuple(header for header, _ in COLUMNS)
+    assert rows[0] == tuple(HEADERS[key] for key in ExportSettings().columns)
     assert len(rows) == 2
     assert rows[1][2] == fake.FAKE_ID_NUMBER
     assert rows[1][6] == fake.FAKE_COMMITMENT_NUMBER

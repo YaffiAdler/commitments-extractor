@@ -17,7 +17,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 @pytest.fixture(autouse=True)
 def job_store_backend(request, tmp_path_factory, monkeypatch) -> str:
     """Select the job store and keep its database out of the repository."""
-    backend = getattr(request, "param", StorageName.SQLITE.value)
+    backend = getattr(request, "param", StorageName.MEMORY.value)
     monkeypatch.setenv("CE_STORAGE", backend)
     monkeypatch.setenv("CE_DB_PATH", str(tmp_path_factory.mktemp("db") / "app.db"))
     return backend
