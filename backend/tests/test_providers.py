@@ -18,5 +18,5 @@ def test_create_provider_by_setting(monkeypatch):
 
 
 def test_all_providers_implement_protocol():
-    for provider in (ClaudeProvider("m", 1.0), GeminiProvider("m", 1.0), LocalVlmProvider("http://x"), FakeProvider()):
+    for provider in (ClaudeProvider("m", 1.0), GeminiProvider("m", 1.0), LocalVlmProvider("http://x", "m", 1.0), FakeProvider()):
         assert isinstance(provider, ExtractionProvider)

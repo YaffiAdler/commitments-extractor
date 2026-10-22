@@ -6,13 +6,14 @@ import numpy as np
 import pytesseract
 from pytesseract import Output
 
-from app.ocr.base import OcrError, OcrWord, OrientationGuess
+from app.ocr.base import OcrError, OcrLine, OcrWord, OrientationGuess
 
 OSD_LANGUAGE = "osd"
 OSD_CONFIG = "--psm 0"
 LANGUAGE_SEPARATOR = "+"
 MIN_WORD_LENGTH = 2
 PERCENT = 100.0
+SINGLE_LINE_CONFIG = "--psm 7 -c tessedit_char_whitelist={allowed}"
 
 
 class TesseractUnavailableError(RuntimeError):
@@ -70,9 +71,19 @@ class TesseractEngine:
             if float(conf) >= 0 and text.strip()
         ]
 
-    def _image_to_data(self, image: np.ndarray) -> dict[str, list]:
+    def read_line(self, image: np.ndarray, allowed_chars: str) -> OcrLine:
+        """``--psm 7`` (one text line) with a character whitelist."""
+        data = self._image_to_data(image, SINGLE_LINE_CONFIG.format(allowed=allowed_chars))
+        words = [(text.strip(), float(conf) / PERCENT) for text, conf in zip(data["text"], data["conf"])
+                 if float(conf) >= 0 and text.strip()]
+        if not words:
+            return OcrLine(text="", confidence=0.0)
+        return OcrLine(text=" ".join(text for text, _ in words),
+                       confidence=sum(conf for _, conf in words) / len(words))
+
+    def _image_to_data(self, image: np.ndarray, config: str = "") -> dict[str, list]:
         try:
-            return pytesseract.image_to_data(image, lang=self._languages, output_type=Output.DICT,
+            return pytesseract.image_to_data(image, lang=self._languages, config=config, output_type=Output.DICT,
                                              timeout=self._timeout_s)
         except (pytesseract.TesseractError, RuntimeError) as exc:
             raise OcrError("tesseract recognition failed") from exc

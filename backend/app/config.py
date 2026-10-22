@@ -77,6 +77,26 @@ class PreprocessSettings:
 
 
 @dataclass(frozen=True)
+class ExtractionSettings:
+    """How provider calls are made while reading forms (``app/pipeline/calls.py``)."""
+
+    # Provider calls in flight at once, over all forms of a job.
+    concurrency: int = field(default_factory=lambda: int(_env("extract_concurrency", "4")))
+    # Per call, around the provider's own HTTP timeout (a safety net, so it is longer).
+    call_timeout_s: float = field(default_factory=lambda: float(_env("extract_call_timeout_s", "240")))
+    # Attempts per call for retryable failures (timeout, rate limit, overload).
+    max_attempts: int = field(default_factory=lambda: int(_env("extract_max_attempts", "3")))
+    backoff_initial_s: float = field(default_factory=lambda: float(_env("extract_backoff_initial_s", "2")))
+    backoff_max_s: float = field(default_factory=lambda: float(_env("extract_backoff_max_s", "30")))
+
+    def __post_init__(self) -> None:
+        if self.concurrency < 1 or self.max_attempts < 1:
+            raise ValueError("extract concurrency and attempts must be at least 1")
+        if self.call_timeout_s <= 0 or not 0 <= self.backoff_initial_s <= self.backoff_max_s:
+            raise ValueError("extract timeout must be positive and 0 <= backoff initial <= backoff max")
+
+
+@dataclass(frozen=True)
 class Settings:
     form_types_dir: Path = field(default_factory=lambda: Path(_env("form_types_dir", str(BACKEND_DIR / "form_types"))))
     senders_path: Path = field(default_factory=lambda: Path(_env("senders_path", str(BACKEND_DIR / "data" / "senders.json"))))
@@ -91,6 +111,10 @@ class Settings:
     # Gemini thinking models take well over a minute on a full scanned page.
     gemini_timeout_s: float = field(default_factory=lambda: float(_env("gemini_timeout_s", "180")))
     local_vlm_url: str = field(default_factory=lambda: _env("local_vlm_url", "http://localhost:11434"))
+    local_vlm_model: str = field(default_factory=lambda: _env("local_vlm_model", "qwen2.5vl:7b"))
+    local_vlm_timeout_s: float = field(default_factory=lambda: float(_env("local_vlm_timeout_s", "300")))
+    prompts_dir: Path = field(default_factory=lambda: Path(_env("prompts_dir", str(BACKEND_DIR / "prompts"))))
+    prompt_version: str = field(default_factory=lambda: _env("prompt_version", "v1"))
     # A field with confidence below this threshold is flagged for review.
     review_threshold: float = field(default_factory=lambda: float(_env("review_threshold", "0.85")))
 
@@ -104,6 +128,7 @@ class Settings:
     max_pages: int = field(default_factory=lambda: int(_env("max_pages", "200")))
 
     preprocess: PreprocessSettings = field(default_factory=PreprocessSettings)
+    extraction: ExtractionSettings = field(default_factory=ExtractionSettings)
     # Empty = find ``tesseract`` on PATH.
     tesseract_cmd: str = field(default_factory=lambda: _env("tesseract_cmd", ""))
     ocr_languages: str = field(default_factory=lambda: _env("ocr_languages", "heb+eng"))
@@ -112,7 +137,8 @@ class Settings:
     def __post_init__(self) -> None:
         if self.render_dpi <= 0:
             raise ValueError("render_dpi must be positive")
-        if self.claude_timeout_s <= 0 or self.gemini_timeout_s <= 0 or self.ocr_timeout_s <= 0 or self.job_ttl_s <= 0:
+        if min(self.claude_timeout_s, self.gemini_timeout_s, self.local_vlm_timeout_s, self.ocr_timeout_s,
+               self.job_ttl_s) <= 0:
             raise ValueError("timeouts and TTL must be positive")
         if self.max_upload_mb <= 0 or self.max_pages <= 0:
             raise ValueError("upload and page limits must be positive")

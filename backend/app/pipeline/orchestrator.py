@@ -1,19 +1,29 @@
 """Run the pipeline stages over the files of one job.
 
-Wired so far: ingest -> preprocess -> segment -> classify -> extract.
-normalize and confidence are not wired in yet, so every field except a
-matched sender stays at confidence 0 / needs review.
+Wired so far: ingest -> preprocess -> segment -> (per form, concurrently)
+classify -> extract -> OCR cross-check -> second look. normalize and
+confidence are not wired in yet, so every field except a matched sender stays
+at confidence 0 / needs review.
+
+A form that fails is marked (``FormGroup.error``, ``extraction_failed``) and
+the other forms are still read; the job fails only if every form failed.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 
 from app.config import Settings
 from app.ocr.base import OcrEngine
+from app.pipeline import classify, ingest, preprocess, segment
+from app.pipeline.calls import ProviderCalls
 from app.pipeline.ingest import PageImage
-from app.pipeline import classify, extract, ingest, preprocess, segment
+from app.pipeline.read_form import FormReader
 from app.providers.base import ExtractionProvider
-from app.schemas import FormGroup, FormType, Job, JobStatus, Segmentation, Sender
+from app.schemas import EXTRACTION_FAILED, FormGroup, FormType, Job, JobStatus, Segmentation, Sender
+
+logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
@@ -29,8 +39,7 @@ class Orchestrator:
         self._settings = settings
         self._provider = provider
         self._form_types = form_types
-        self._generic_form_type = generic_form_type
-        self._sender_matcher = classify.SenderMatcher(senders)
+        self._reader = FormReader(provider, form_types, generic_form_type, classify.SenderMatcher(senders), ocr)
         self._ocr = ocr
         self._ingest_limits = ingest.IngestLimits(
             max_file_bytes=settings.max_upload_mb * ingest.BYTES_PER_MB,
@@ -39,7 +48,8 @@ class Orchestrator:
         )
 
     def run(self, job: Job, stored_files: list[Path]) -> Job:
-        """Process ``stored_files`` and fill ``job.groups``.
+        """Process ``stored_files`` and fill ``job.groups``. Must not be called
+        from a running event loop (it runs its own for the provider calls).
 
         On failure ``job.error`` holds the exception type only — never field values.
         """
@@ -54,6 +64,9 @@ class Orchestrator:
             job.status = JobStatus.FAILED
             job.error = type(exc).__name__
             raise
+        if job.groups and all(group.error for group in job.groups):
+            job.status, job.error = JobStatus.FAILED, job.groups[0].error
+            return job
         job.status = JobStatus.DONE
         return job
 
@@ -65,15 +78,21 @@ class Orchestrator:
         result = segment.segment(pages, self._ocr, self._form_types, self._provider,
                                  self._settings.review_threshold)
         by_page_no = {page.page_no: page for page in pages}
-        for group in result.groups:
-            self._read_form(group, [by_page_no[n] for n in group.pages])
+        asyncio.run(self._read_forms([(group, [by_page_no[n] for n in group.pages]) for group in result.groups]))
         return result
 
-    def _read_form(self, group: FormGroup, pages: list[PageImage]) -> None:
-        """Classify the form, extract it with the chosen layout and set the
-        matched sender (the sender read by ``extract`` is not used)."""
-        found = classify.classify(pages, self._form_types, self._generic_form_type,
-                                  self._sender_matcher, self._provider)
-        group.commitment = extract.extract(pages, found.form_type, self._provider)
-        group.commitment.sender = found.sender.to_field()
-        group.form_reasons.extend(found.form_reasons)
+    async def _read_forms(self, forms: list[tuple[FormGroup, list[PageImage]]]) -> None:
+        semaphore = asyncio.Semaphore(self._settings.extraction.concurrency)
+        await asyncio.gather(*(self._read_form(group, pages, semaphore) for group, pages in forms))
+
+    async def _read_form(self, group: FormGroup, pages: list[PageImage], semaphore: asyncio.Semaphore) -> None:
+        calls = ProviderCalls(semaphore, self._settings.extraction)
+        try:
+            await self._reader.read(group, pages, calls)
+        except Exception as exc:  # one failed form must not stop the others; it is recorded on the form
+            group.error = type(exc).__name__
+            group.form_reasons.append(EXTRACTION_FAILED)
+            logger.warning("form %s (file %s, %d pages) failed: %s", group.id, group.source_file,
+                           len(group.pages), group.error)
+        finally:
+            group.vlm_calls = calls.count

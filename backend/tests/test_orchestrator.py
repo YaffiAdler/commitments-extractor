@@ -6,8 +6,9 @@ from app.pipeline.classify import GENERIC_FORM_TYPE_ID, load_form_types, load_ge
 from app.pipeline.normalize import load_senders
 from app.pipeline.orchestrator import Orchestrator
 from app.providers import fake
+from app.providers.base import ProviderError
 from app.providers.fake import FakeProvider
-from app.schemas import FORM_TYPE_UNKNOWN, Job, JobStatus, PageRelation
+from app.schemas import EXTRACTION_FAILED, FORM_TYPE_UNKNOWN, Job, JobStatus, PageRelation
 
 
 def _build(provider: FakeProvider) -> Orchestrator:
@@ -129,3 +130,36 @@ def test_unknown_form_type_is_extracted_with_the_generic_yaml(tmp_path, monkeypa
     assert job.groups[0].form_reasons == [FORM_TYPE_UNKNOWN] and job.groups[0].needs_review
     # senders=[]: nothing to match against, so the sender stays empty.
     assert job.groups[0].commitment.sender.value is None
+
+
+def test_a_failing_form_is_marked_and_the_others_are_still_read(tmp_path, monkeypatch):
+    class FailsOnSecondPage(FakeProvider):
+        def extract_form(self, pages, form_type):
+            if pages[0].page_no == 1:
+                raise ProviderError("dummy failure")
+            return super().extract_form(pages, form_type)
+
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    job = _build(FailsOnSecondPage()).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 3)])
+    assert job.status is JobStatus.DONE and job.error is None
+    failed = [g for g in job.groups if g.error]
+    assert [g.pages for g in failed] == [[1]] and failed[0].error == "ProviderError"
+    assert EXTRACTION_FAILED in failed[0].form_reasons and failed[0].needs_review
+    assert all(g.commitment.id_number.value == fake.FAKE_ID_NUMBER for g in job.groups if not g.error)
+
+
+def test_job_fails_when_every_form_failed(tmp_path, monkeypatch):
+    class AlwaysFails(FakeProvider):
+        def classify(self, pages, form_types):
+            raise ProviderError("dummy failure")
+
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    job = _build(AlwaysFails()).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 2)])
+    assert job.status is JobStatus.FAILED and job.error == "ProviderError"
+    assert len(job.groups) == 2
+
+
+def test_provider_calls_are_counted_per_form(tmp_path, monkeypatch):
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    job = _orchestrator(monkeypatch).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 2)])
+    assert [g.vlm_calls for g in job.groups] == [2, 2]  # classify + extract

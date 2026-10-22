@@ -1,6 +1,7 @@
-"""What every vision-model provider shares: the prompts, the JSON schemas of
-the expected output, page encoding and turning the model output into
-``Commitment`` objects.
+"""What every vision-model provider shares: the short instructions, the JSON
+schemas of the expected output, image encoding and parsing the model output
+into the typed answers of ``ExtractionProvider``. The extraction and
+second-look prompts are versioned files (``prompts.py``).
 
 Providers only differ in how they send a request and where the JSON output
 sits in the response.
@@ -8,29 +9,34 @@ sits in the response.
 from __future__ import annotations
 
 import base64
-from datetime import date
-from typing import Any
+from typing import Any, get_args
 
 import cv2
+import numpy as np
 from pydantic import ValidationError
 
 from app.imaging.geometry import downscale_to_max_edge
 from app.pipeline.ingest import PageImage
 from app.providers.base import ProviderError
-from app.schemas import UNKNOWN_FORM_TYPE, Commitment, Field, FormClassification, FormType, PageRelation
+from app.schemas import (
+    UNKNOWN_FORM_TYPE,
+    FormClassification,
+    FormReading,
+    FormType,
+    NumberReading,
+    PageRelation,
+    ReadingSource,
+)
 
 # Preprocess already downscales; this guards the case where that step is
 # switched off (minimal data out; the APIs do not use more resolution anyway).
 MAX_IMAGE_EDGE_PX = 2000
 JPEG_QUALITY = 85
 JPEG_MEDIA_TYPE = "image/jpeg"
-UNPARSED_DATE_REASON = "unparsed_date"
 
 LIST_FIELDS = ("central_numbers", "commitment_numbers")
-SCALAR_STR_FIELDS = ("first_name", "last_name", "id_number", "sender")
-DATE_FIELD = "received_date"
+SCALAR_FIELDS = ("first_name", "last_name", "id_number", "received_date", "sender")
 SENDER_FIELD = "sender"
-READINGS_KEY = "readings"
 
 SYSTEM_PROMPT = (
     "You read scanned Hebrew commitment forms sent to a virology laboratory. "
@@ -40,26 +46,53 @@ SYSTEM_PROMPT = (
 )
 
 _NULLABLE_STRING = {"type": ["string", "null"]}
-_STRING_LIST = {"type": "array", "items": {"type": "string"}}
+_NUMBER = {"type": "number"}
 
-COMMITMENT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "first_name": _NULLABLE_STRING,
-        "last_name": _NULLABLE_STRING,
-        "id_number": {**_NULLABLE_STRING, "description": "Israeli ID number, digits as written"},
-        "central_numbers": {**_STRING_LIST, "description": "every number on a 'מרכזי' sticker or handwritten in its place"},
-        "received_date": {**_NULLABLE_STRING, "description": "date in the 'התקבל' stamp or handwritten under the central number, YYYY-MM-DD; null if the year is not written"},
-        "sender": {**_NULLABLE_STRING, "description": "the body that sent the sample and is billed (HMO or hospital)"},
-        "commitment_numbers": {**_STRING_LIST, "description": "every commitment number ('דרישה'; on Leumit forms 'דגימה')"},
-    },
-    "required": [*SCALAR_STR_FIELDS, DATE_FIELD, *LIST_FIELDS],
+_RELATIVE_BOX: dict[str, Any] = {
+    "type": ["object", "null"],
+    "description": "where the value is, as fractions 0..1 of the image width/height; page = 0-based image index",
+    "properties": {"page": {"type": "integer"}, "x0": _NUMBER, "y0": _NUMBER, "x1": _NUMBER, "y1": _NUMBER},
+    "required": ["page", "x0", "y0", "x1", "y1"],
 }
 
-READINGS_SCHEMA: dict[str, Any] = {
+
+def _reading(description: str) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": description,
+        "properties": {
+            "value": {**_NULLABLE_STRING, "description": "exactly as written; null if absent or unclear"},
+            "bbox": _RELATIVE_BOX,
+            "legible": {"type": "boolean", "description": "false if cut off, smudged or covered"},
+            "source": {"type": "string", "enum": list(get_args(ReadingSource))},
+            "note": {**_NULLABLE_STRING, "description": "only if something is unusual; no names or numbers"},
+        },
+        "required": ["value", "bbox", "legible", "source", "note"],
+    }
+
+
+def _readings(description: str) -> dict[str, Any]:
+    return {"type": "array", "description": description, "items": _reading(description)}
+
+
+FORM_READING_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "properties": {READINGS_KEY: _STRING_LIST},
-    "required": [READINGS_KEY],
+    "properties": {
+        "first_name": _reading("patient first name"),
+        "last_name": _reading("patient last name"),
+        "id_number": _reading("Israeli ID number, digits as written"),
+        "central_numbers": _readings("every number on a 'מרכזי' sticker or handwritten in its place"),
+        "received_date": _reading("date in the 'התקבל' stamp or handwritten under the central number, as written"),
+        "sender": _reading("the body that sent the sample and is billed (HMO or hospital)"),
+        "commitment_numbers": _readings("every commitment number ('דרישה'; 'דגימה' on Leumit, LabOS and Rambam forms)"),
+    },
+    "required": [*SCALAR_FIELDS, *LIST_FIELDS],
+}
+
+NUMBER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"value": {**_NULLABLE_STRING, "description": "digits only, or null"}},
+    "required": ["value"],
 }
 
 
@@ -96,15 +129,6 @@ def form_classification_schema(form_types: dict[str, FormType]) -> dict[str, Any
     }
 
 
-def extract_instruction(form_type: FormType | None) -> str:
-    hint = f"Expected layout: {form_type.display_name}." if form_type else ""
-    return f"Read this form. {hint}"
-
-
-def reread_instruction(field_name: str) -> str:
-    return f"Read only the field '{field_name}' again, carefully."
-
-
 def classify_instruction(form_types: dict[str, FormType]) -> str:
     """Ask for the layout of the first page and the sender as printed, with
     each type's own sender hint from its YAML."""
@@ -121,51 +145,35 @@ def classify_instruction(form_types: dict[str, FormType]) -> str:
     )
 
 
-def encode_page(page: PageImage) -> str:
-    """The page as a base64 JPEG, downscaled to ``MAX_IMAGE_EDGE_PX``."""
-    ok, jpeg = cv2.imencode(".jpg", downscale_to_max_edge(page.image, MAX_IMAGE_EDGE_PX),
+def encode_image(image: np.ndarray) -> str:
+    """An image as a base64 JPEG, downscaled to ``MAX_IMAGE_EDGE_PX``."""
+    ok, jpeg = cv2.imencode(".jpg", downscale_to_max_edge(image, MAX_IMAGE_EDGE_PX),
                             [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
     if not ok:
-        raise ProviderError("page image could not be encoded")
+        raise ProviderError("image could not be encoded")
     return base64.standard_b64encode(jpeg.tobytes()).decode("ascii")
 
 
-def _str_field(raw: Any) -> Field[str]:
-    text = raw.strip() if isinstance(raw, str) else ""
-    return Field[str](value=text, raw_value=text) if text else Field[str]()
+def encode_page(page: PageImage) -> str:
+    """The page image sent to the model (never the binarized OCR copy)."""
+    return encode_image(page.image)
 
 
-def _str_list(raw: Any) -> list[Field[str]]:
-    """Non-empty readings, identical repeats removed (order kept)."""
-    fields = [_str_field(v) for v in raw] if isinstance(raw, list) else []
-    unique = dict.fromkeys(f.value for f in fields if f.value)
-    return [_str_field(v) for v in unique]
-
-
-def _date_field(raw: Any) -> Field[date]:
-    if not isinstance(raw, str) or not raw.strip():
-        return Field[date]()
+def form_reading_from_output(data: dict[str, Any]) -> FormReading:
+    """Parse output matching ``FORM_READING_SCHEMA``. The validation error is
+    not chained: its text would quote the values (patient data)."""
     try:
-        return Field[date](value=date.fromisoformat(raw.strip()), raw_value=raw.strip())
-    except ValueError:
-        return Field[date](raw_value=raw.strip(), reasons=[UNPARSED_DATE_REASON])
+        return FormReading.model_validate(data)
+    except ValidationError:
+        raise ProviderError("extraction answer does not match the schema") from None
 
 
-def commitment_from_output(data: dict[str, Any]) -> Commitment:
-    """Build a ``Commitment`` from output matching ``COMMITMENT_SCHEMA``.
-    Confidence is left unset (0, needs review) — scoring belongs to the pipeline."""
-    return Commitment(
-        **{name: _str_field(data.get(name)) for name in SCALAR_STR_FIELDS},
-        received_date=_date_field(data.get(DATE_FIELD)),
-        **{name: _str_list(data.get(name)) for name in LIST_FIELDS},
-    )
-
-
-def readings_from_output(data: dict[str, Any]) -> list[str]:
-    readings = data.get(READINGS_KEY)
-    if not isinstance(readings, list):
-        return []
-    return [r.strip() for r in readings if isinstance(r, str) and r.strip()]
+def number_from_output(data: dict[str, Any]) -> NumberReading:
+    """Parse output matching ``NUMBER_SCHEMA`` (error not chained, as above)."""
+    try:
+        return NumberReading.model_validate(data)
+    except ValidationError:
+        raise ProviderError("number answer does not match the schema") from None
 
 
 def form_classification_from_output(data: dict[str, Any], form_types: dict[str, FormType]) -> FormClassification:

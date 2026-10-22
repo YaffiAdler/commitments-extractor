@@ -7,30 +7,38 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+import numpy as np
+
 from app.pipeline.ingest import PageImage
-from app.schemas import Commitment, FormClassification, FormType, PageRelation
+from app.schemas import FormClassification, FormReading, FormType, NumberReading, PageRelation
 
 
 class ProviderError(RuntimeError):
     """A provider call failed. The message never contains field values."""
 
 
+class RetryableProviderError(ProviderError):
+    """A provider call failed in a way that may pass on a later attempt
+    (timeout, rate limit, overload, connection error)."""
+
+
 @runtime_checkable
 class ExtractionProvider(Protocol):
     name: str
 
-    def extract_form(self, pages: list[PageImage], form_type: FormType | None) -> Commitment:
-        """Read the raw field values of one form.
+    def extract_form(self, pages: list[PageImage], form_type: FormType | None) -> FormReading:
+        """Read the raw field values of one form, each with its box on the
+        page, whether it is legible, how it was written and an optional note.
 
         ``form_type`` (when known) supplies labels and hints for each field.
-        Fields that are not found must be left empty, never guessed, and the
-        provider must not set ``confidence`` — that is computed by the pipeline.
+        Fields that are not found must be left empty, never guessed; checking
+        and scoring belong to the pipeline.
         """
         ...
 
-    def reread_field(self, pages: list[PageImage], field_name: str, form_type: FormType | None) -> list[str]:
-        """Read one ``Commitment`` field again; return every raw reading found
-        (empty if the field is not on the form)."""
+    def read_number(self, crop: np.ndarray) -> NumberReading:
+        """Read the number on one enlarged crop (a second look at a single
+        value): digits only, or None if no number can be read with certainty."""
         ...
 
     def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:

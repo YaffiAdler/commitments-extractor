@@ -9,8 +9,10 @@ COPY app ./app
 RUN pip install --no-cache-dir .
 COPY form_types ./form_types
 COPY data ./data
+COPY prompts ./prompts
 ENV CE_FORM_TYPES_DIR=/app/form_types \
     CE_SENDERS_PATH=/app/data/senders.json \
+    CE_PROMPTS_DIR=/app/prompts \
     CE_TMP_DIR=/tmp/commitments-extractor
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

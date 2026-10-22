@@ -10,51 +10,72 @@ import pytest
 
 from app.pipeline.ingest import PageImage
 from app.providers.common import (
+    FORM_READING_SCHEMA,
     MAX_IMAGE_EDGE_PX,
+    NUMBER_SCHEMA,
     PAGE_RELATION_SCHEMA,
-    UNPARSED_DATE_REASON,
-    commitment_from_output,
     encode_page,
     form_classification_from_output,
     form_classification_schema,
+    form_reading_from_output,
+    number_from_output,
     page_relation_from_output,
-    readings_from_output,
 )
 from app.providers.base import ProviderError
-from app.schemas import UNKNOWN_FORM_TYPE, FormClassification, PageRelation, PageType
+from app.schemas import (
+    UNKNOWN_FORM_TYPE,
+    FieldReading,
+    FormClassification,
+    FormReading,
+    NumberReading,
+    PageRelation,
+    PageType,
+    ReadingSource,
+)
+
+
+def _reading(value, **extra) -> dict:
+    return {"value": value, "bbox": None, "legible": True, "source": "printed", "note": None, **extra}
+
 
 DUMMY_OUTPUT = {
-    "first_name": "משה",
-    "last_name": "כהן",
-    "id_number": "000000018",
-    "central_numbers": ["111111", "111111", "222222", " "],
-    "received_date": "2025-01-01",
-    "sender": "מכבי",
+    "first_name": _reading("משה"),
+    "last_name": _reading("כהן"),
+    "id_number": _reading("000000018", bbox={"page": 0, "x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.25}),
+    "central_numbers": [_reading("111111", source="sticker"), _reading("2222", legible=False, source="sticker",
+                                                                       note="cut at the edge")],
+    "received_date": _reading("01.01.2025", source="stamp"),
+    "sender": _reading("מכבי"),
     "commitment_numbers": [],
 }
 
 
-def test_list_fields_are_deduped_and_blanks_dropped():
-    commitment = commitment_from_output(DUMMY_OUTPUT)
-    assert [f.value for f in commitment.central_numbers] == ["111111", "222222"]
-    assert commitment.commitment_numbers == []
+def test_form_reading_keeps_every_item_and_box():
+    reading = form_reading_from_output(DUMMY_OUTPUT)
+    assert [r.value for r in reading.central_numbers] == ["111111", "2222"]
+    assert reading.central_numbers[1].legible is False
+    assert reading.id_number.bbox.x1 == 0.3 and reading.commitment_numbers == []
 
 
-def test_null_field_stays_empty_and_flagged():
-    commitment = commitment_from_output({**DUMMY_OUTPUT, "first_name": None})
-    assert commitment.first_name.value is None
-    assert commitment.first_name.needs_review
+def test_form_reading_outside_schema_is_provider_error_without_values():
+    with pytest.raises(ProviderError) as info:
+        form_reading_from_output({**DUMMY_OUTPUT, "id_number": {**_reading("000000018"), "source": "guess"}})
+    assert "000000018" not in str(info.value) and info.value.__cause__ is None
 
 
-def test_unparsed_date_stays_empty():
-    commitment = commitment_from_output({**DUMMY_OUTPUT, "received_date": "31.8"})
-    assert commitment.received_date.value is None
-    assert UNPARSED_DATE_REASON in commitment.received_date.reasons
+def test_form_reading_schema_matches_the_model():
+    assert set(FORM_READING_SCHEMA["required"]) == set(FormReading.model_fields)
+    item = FORM_READING_SCHEMA["properties"]["central_numbers"]["items"]
+    assert set(item["required"]) == set(FieldReading.model_fields)
+    assert tuple(item["properties"]["source"]["enum"]) == get_args(ReadingSource)
 
 
-def test_readings_drop_blanks_and_non_strings():
-    assert readings_from_output({"readings": [" 123 ", "", 5]}) == ["123"]
-    assert readings_from_output({}) == []
+def test_number_reading():
+    assert number_from_output({"value": "123"}) == NumberReading(value="123")
+    assert number_from_output({"value": None}).value is None
+    assert set(NUMBER_SCHEMA["required"]) == set(NumberReading.model_fields)
+    with pytest.raises(ProviderError):
+        number_from_output({"value": 5})
 
 
 def test_classification_keeps_a_known_form_type():

@@ -16,6 +16,7 @@ dependencies = [
     "pillow>=10.3",
     "pytesseract>=0.3.10",
     "rapidfuzz>=3.6",
+    "tenacity>=8.2",
 ]
 
 [project.optional-dependencies]

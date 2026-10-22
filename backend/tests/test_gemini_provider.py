@@ -1,6 +1,5 @@
 """GeminiProvider against a mocked HTTP transport — no network, no real key."""
 import json
-from datetime import date
 from pathlib import Path
 
 import httpx
@@ -8,19 +7,24 @@ import numpy as np
 import pytest
 
 from app.pipeline.ingest import PageImage
-from app.providers.base import ProviderError
+from app.providers.base import ProviderError, RetryableProviderError
 from app.config import Settings
 from app.pipeline.classify import load_form_types
 from app.providers.gemini import API_KEY_ENV, API_KEY_HEADER, MAX_ATTEMPTS, GeminiProvider
 
+
+def _reading(value) -> dict:
+    return {"value": value, "bbox": None, "legible": True, "source": "printed", "note": None}
+
+
 DUMMY_OUTPUT = {
-    "first_name": "משה",
-    "last_name": "כהן",
-    "id_number": "000000018",
-    "central_numbers": ["111111"],
-    "received_date": "2025-01-01",
-    "sender": "מכבי",
-    "commitment_numbers": ["0001234567"],
+    "first_name": _reading("משה"),
+    "last_name": _reading("כהן"),
+    "id_number": _reading("000000018"),
+    "central_numbers": [_reading("111111")],
+    "received_date": _reading("01.01.2025"),
+    "sender": _reading("מכבי"),
+    "commitment_numbers": [_reading("0001234567")],
 }
 
 
@@ -54,16 +58,14 @@ def test_extract_form_sends_schema_and_parses_answer(api_key):
         assert body["contents"][0]["parts"][0]["inlineData"]["mimeType"] == "image/jpeg"
         return httpx.Response(200, json=_answer(DUMMY_OUTPUT))
 
-    commitment = _provider(handler).extract_form([_page()], None)
-    assert commitment.id_number.value == "000000018"
-    assert commitment.received_date.value == date(2025, 1, 1)
-    assert [f.value for f in commitment.commitment_numbers] == ["0001234567"]
-    assert commitment.id_number.confidence == 0.0  # scoring belongs to the pipeline
+    reading = _provider(handler).extract_form([_page()], None)
+    assert reading.id_number.value == "000000018"
+    assert [r.value for r in reading.commitment_numbers] == ["0001234567"]
 
 
-def test_reread_field(api_key):
-    provider = _provider(lambda _: httpx.Response(200, json=_answer({"readings": ["123", " "]})))
-    assert provider.reread_field([_page()], "id_number", None) == ["123"]
+def test_read_number(api_key):
+    provider = _provider(lambda _: httpx.Response(200, json=_answer({"value": None})))
+    assert provider.read_number(np.zeros((20, 60, 3), np.uint8)).value is None
 
 
 def test_missing_key(monkeypatch):
@@ -83,7 +85,7 @@ def test_timeout(api_key):
     def slow(request):
         raise httpx.ReadTimeout("timeout", request=request)
 
-    with pytest.raises(ProviderError, match="timed out"):
+    with pytest.raises(RetryableProviderError, match="timed out"):
         _provider(slow).extract_form([_page()], None)
 
 
@@ -121,8 +123,8 @@ def test_overload_is_retried_then_succeeds(api_key):
         status = next(statuses)
         return httpx.Response(status, json=_answer(DUMMY_OUTPUT) if status == 200 else {})
 
-    commitment = _provider(handler, sleeps).extract_form([_page()], None)
-    assert commitment.id_number.value == "000000018"
+    reading = _provider(handler, sleeps).extract_form([_page()], None)
+    assert reading.id_number.value == "000000018"
     assert sleeps == [2.0, 4.0]
 
 

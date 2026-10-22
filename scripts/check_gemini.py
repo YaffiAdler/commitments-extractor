@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.config import Settings  # noqa: E402
 from app.pipeline.ingest import PageImage  # noqa: E402
-from app.providers.common import COMMITMENT_SCHEMA, SYSTEM_PROMPT, extract_instruction  # noqa: E402
+from app.providers.common import FORM_READING_SCHEMA, SYSTEM_PROMPT  # noqa: E402
 from app.providers.gemini import (  # noqa: E402
     API_KEY_ENV,
     API_KEY_HEADER,
@@ -26,6 +26,7 @@ from app.providers.gemini import (  # noqa: E402
     JSON_MIME_TYPE,
     _image_parts,
 )
+from app.providers.prompts import Prompts  # noqa: E402
 
 BLANK_PAGE_PX = 200
 MAX_PRINTED_CHARS = 2000
@@ -55,8 +56,9 @@ def main() -> None:
         print("\n--- 2. same request as the provider (blank page) ---")
         _send(client, url, key, {
             "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-            "contents": [{"role": "user", "parts": [*_image_parts([_blank_page()]), {"text": extract_instruction(None)}]}],
-            "generationConfig": {"responseMimeType": JSON_MIME_TYPE, "responseJsonSchema": COMMITMENT_SCHEMA},
+            "contents": [{"role": "user", "parts": [*_image_parts([_blank_page().image]),
+                                                   {"text": Prompts.load().extract(None)}]}],
+            "generationConfig": {"responseMimeType": JSON_MIME_TYPE, "responseJsonSchema": FORM_READING_SCHEMA},
         })
 
 

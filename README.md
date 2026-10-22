@@ -2,7 +2,7 @@
 
 An engine that reads commitment forms received by the Central Virology Laboratory, extracts their fields, flags anything uncertain and exports to Excel.
 
-**Status: Phase 4 (form type and sender)** — upload a PDF or an image, straighten and clean every page, split the pages into forms, classify each form and match its sender to the closed list, extract each form through a provider, download an Excel file. Wired: `ingest -> preprocess -> segment -> classify -> extract`; normalize and confidence are still stubs (`NotImplementedError`). No extraction or classification accuracy has been measured.
+**Status: Phase 5 (extraction core)** — upload a PDF or an image, straighten and clean every page, split the pages into forms, classify each form and match its sender to the closed list, extract each form through a provider (value, box, legibility per field), cross-check printed numbers with Tesseract, take one second look at unconfirmed numbers, download an Excel file. Forms are read concurrently; a failed form is marked and does not stop the others. Wired: `ingest -> preprocess -> segment -> classify -> extract -> OCR check -> second look`; normalize and confidence are still stubs (`NotImplementedError`), so every field stays flagged for review. No extraction or classification accuracy has been measured.
 
 ## Layout
 ```
@@ -10,11 +10,14 @@ backend/app/main.py           FastAPI app: /jobs upload, status, export, delete
 backend/app/config.py         settings: paths, provider, review threshold (env vars CE_*)
 backend/app/schemas.py        data model (Pydantic v2)
 backend/app/pipeline/         one module per stage: ingest -> preprocess -> segment -> classify
-                              -> extract -> normalize -> confidence, wired by orchestrator.py
+                              -> extract -> ocr_check -> reread -> normalize -> confidence, wired by
+                              orchestrator.py; read_form.py reads one form, calls.py runs provider
+                              calls (semaphore, retries, timeout), crops.py cuts single values
 backend/app/imaging/          pure image operations used by preprocess (geometry, deskew,
                               perspective, illumination, orientation)
 backend/app/ocr/              OcrEngine Protocol (base.py) + Tesseract
-backend/app/providers/        ExtractionProvider Protocol (base.py) + claude / gemini / local_vlm / fake (shared prompt/schema/parsing in common.py)
+backend/app/providers/        ExtractionProvider Protocol (base.py) + claude / gemini / local_vlm / fake (shared schema/parsing in common.py, prompt files in prompts.py)
+backend/prompts/              versioned prompt files: extract_v1.md (template + YAML block), read_number_v1.md
 backend/app/export/xlsx.py    Excel export
 backend/app/storage/          JobStore Protocol (base.py) + sqlite / memory job stores, tmp.py: temporary per-job files
 backend/form_types/*.yaml     one definition per observed form type (25 types) + generic.yaml (fallback)
@@ -29,6 +32,7 @@ scripts/render_previews.py    renders samples/ pages to PNG for manual review
 scripts/make_synthetic_variants.py   6 synthetic distortions of a page (used by the tests)
 scripts/preprocess_examples.py       before/after images -> docs/preprocess_examples/
 scripts/classify_report.py    stage 4 on samples/: type, sender as read, matched sender, score
+scripts/extract_report.py     stage 5 on samples/: fields filled and model calls (counts only)
 ```
 
 ## Running
@@ -83,6 +87,16 @@ Fields that need review are highlighted (in the table and in the Excel file).
 | `GEMINI_API_KEY` | — | required for `gemini` |
 | `CE_GEMINI_MODEL` | `gemini-3.8-flash` | |
 | `CE_GEMINI_TIMEOUT_S` | `180` | per API call (thinking models are slow on full pages) |
+| `CE_LOCAL_VLM_URL` | `http://localhost:11434` | Ollama server for `local_vlm` |
+| `CE_LOCAL_VLM_MODEL` | `qwen2.5vl:7b` | any vision model pulled on that server |
+| `CE_LOCAL_VLM_TIMEOUT_S` | `300` | per call |
+| `CE_PROMPT_VERSION` | `v1` | picks `backend/prompts/extract_<v>.md` and `read_number_<v>.md` |
+| `CE_PROMPTS_DIR` | `backend/prompts` | |
+| `CE_EXTRACT_CONCURRENCY` | `4` | provider calls in flight at once while reading the forms of a job |
+| `CE_EXTRACT_CALL_TIMEOUT_S` | `240` | per call, around the provider's own HTTP timeout |
+| `CE_EXTRACT_MAX_ATTEMPTS` | `3` | per call, for timeouts / rate limits / overloads |
+| `CE_EXTRACT_BACKOFF_INITIAL_S` | `2` | exponential backoff (2, 4, 8 … s) plus up to this much jitter |
+| `CE_EXTRACT_BACKOFF_MAX_S` | `30` | |
 | `CE_STORAGE` | `sqlite` | `sqlite` (survives restarts) / `memory` |
 | `CE_DB_PATH` | `backend/data/app.db` | SQLite file; created at startup |
 | `CE_JOB_TTL_S` | `3600` | jobs and their files are deleted after this (both stores) |
@@ -180,6 +194,41 @@ Fields that need review are highlighted (in the table and in the Excel file).
 - `classify.classify(pages, form_types)` (stub) → `classify(pages, form_types, generic, matcher, provider) -> Classification`. New: `load_generic_form_type`, `SenderMatcher`, `normalize_sender_name`. `load_form_types` skips `generic.yaml`.
 - `Orchestrator(...)` takes a new required `generic_form_type`.
 - `FormGroup`: new `form_reasons`; `needs_review` also covers `form_type_unknown`. New model `FormClassification`; constants `UNKNOWN_FORM_TYPE`, `FORM_TYPE_UNKNOWN`. Stored inside `commitments.data_json`, so SQLite needs no schema change (old rows load with `form_reasons=[]`).
+
+## Assumptions (Phase 5 — extraction core)
+39. **Two routes.** The vision model reads every field of the form (`ExtractionProvider.extract_form` → `FormReading`); per value it returns `value`, `bbox` (fractions 0–1 of the image plus the 0-based index of the image it is on), `legible`, `note` and — beyond the four keys of the task — `source` (`printed` / `handwritten` / `sticker` / `stamp`), because the OCR route needs to know which values are printed. That is the model's own claim and is not checked. Tesseract then re-reads only printed numbers (stage 5b) and the model takes one narrow second look at numbers that are still not confirmed (5c).
+40. **Prompt = fixed template + YAML block.** `backend/prompts/extract_v1.md` holds the rules (no guessing → null; digits copied as seen, nothing completed or corrected; a cut sticker is `legible=false` with the partial value; "דרישה"/"דגימה" = commitment number; every central and commitment number); `{{form_type}}` is replaced by one line per field from the form type's YAML (labels, may repeat, may be handwritten, hint). Versions are separate files chosen by `CE_PROMPT_VERSION`; a released version is never edited (`backend/prompts/README.md`). The output schema stays in code (`common.FORM_READING_SCHEMA`), forced as a Claude tool / Gemini `responseJsonSchema` / Ollama `format`.
+41. **"commitments" in the task = `commitment_numbers`** (the name used by `Commitment` and the YAML files). Several commitments on one form are several items of that list in **one** row — one form is still one `Commitment`; nothing is split into extra Excel rows.
+42. **Dates are copied as written** (changed from Phase 1, where the model was asked for ISO). `extract` parses `D.M.YYYY` (also `/` or `-`, day first as on Israeli forms) or `YYYY-MM-DD` (`normalize.parse_date`); a 2-digit or missing year is not completed: the date stays empty with `unparsed_date` and the text in `raw_value`.
+43. **A box is used only when it is plausible for one value:** on a page of the form, inside the image (±2% overshoot is clipped), corners in order, at most 15% of the page area. Otherwise `Field.bbox` is empty and the field gets `bbox_implausible`. Boxes are stored in `original` pixels (same geometry as the image sent to the model, see 17).
+44. **OCR cross-check (stage 5b)** — only ID, central and commitment numbers whose value is not handwritten: crop = box + 10 px (in `original` pixels) from the binarized `ocr_image` (grayscale `original` if binarizing is off), Tesseract `--psm 7` with a `0123456789` whitelist (languages as configured). Digits only are compared, so spaces/dashes do not count. Outcome codes: `ocr_agrees`, `ocr_disagrees`, `ocr_empty` (no digits read), `ocr_unavailable` (no Tesseract, no plausible box, crop under 8 px, a value with letters, or an OCR error). `ocr_empty`/`ocr_unavailable` are **not** a disagreement. The OCR digits and their confidence are stored as an `ocr` signal in the new `Field.signals`; the model's value is never changed.
+45. **Second look (stage 5c)** — the confidence stage does not exist yet, so "needs review" here means *not confirmed by OCR*: a numeric field is looked at again if it is `illegible` (always, even if OCR agreed with the partial digits), or OCR disagreed / read nothing / was unavailable, or it is handwritten, or it is missing but has a box. A missing value without a box that is not marked illegible is just not on the form. Only numeric fields get it, because the narrow prompt asks for digits ("Which number is written here? Digits only, or null" — `read_number_v1.md`); names and dates do not. Crop = box + 10 px from the **colour** `original` (never binarized), enlarged 2.5× (capped at 1600 px), sent alone. Once per field, at most 8 per form (`reread_limit` beyond). The answer is a `reread` signal, never an overwrite — not even when the value is missing and the second look finds digits (`reread_found_value`). Codes: `reread_agrees` / `reread_disagrees` / `reread_null` / `reread_found_value` / `reread_unavailable` / `reread_failed`.
+46. **Concurrency.** After segmentation, all forms of a file are read concurrently (`asyncio`); every provider call (classify, extract, second looks) runs in a worker thread under one `asyncio.Semaphore` (`CE_EXTRACT_CONCURRENCY`, 4). tenacity retries `RetryableProviderError` (timeout, connection error, HTTP 408/429/5xx, Anthropic 529) and the per-call timeout (`CE_EXTRACT_CALL_TIMEOUT_S`, 240 s) up to 3 attempts, waiting 2, 4 … s (max 30) plus jitter; other errors are not retried. The semaphore is not held while waiting to retry. A timed-out call is abandoned but its thread runs on until the provider's HTTP timeout ends it, so the per-call timeout is set above the HTTP timeouts. Gemini keeps its own 429/503 retry loop (Phase 2) and raises a non-retryable error when it gives up, so its calls are not retried twice for overload. Segmentation calls are still made one by one, outside this.
+47. **A failed form does not fail the job:** its `FormGroup.error` holds the exception type, `form_reasons` gets `extraction_failed` (row flagged for review), and the other forms are read. The job is `failed` only when every form failed (`Job.error` = the first form's error type) — e.g. a missing API key. A failed second look only flags its field (`reread_failed`).
+48. **Call counting:** `FormGroup.vlm_calls` counts every provider call made to read that form, retries included; segmentation calls stay in `Job.split_vlm_calls`.
+49. **Still no confidence.** Signals and reason codes are collected for stage 7; until then every field keeps `confidence=0` and `needs_review` (assumption 11). Model `note` text is stored in the VLM signal for a reviewer and never logged.
+
+### Phase 5 — what was checked
+- **Unit tests, no network and no Tesseract** (fake provider, scripted OCR): per edge case — several central numbers (each OCR'd and second-looked separately), several commitment numbers (several items, repeats once, leading zeros kept), null fields (empty, flagged, no extra call), a cut sticker (partial value kept, `illegible`, second look even when OCR agrees with the partial digits), an unreadable sticker with no value (kept as an item, second look may find digits but never fills them in); box mapping and implausible boxes; date parsing; OCR agree/disagree/empty/unavailable; second look triggers, crop size and colour, cap, failure; `ProviderCalls` retries, no retry for other errors, timeout, semaphore bound across forms, call counts; orchestrator: one failing form is marked and the others are read, all failing → job failed; providers: Claude/Gemini/Ollama request shape, prompt from the versioned file with the YAML block, retryable vs. non-retryable errors, cut-off answer, error texts without bodies.
+- **Real Tesseract:** `read_line` (`--psm 7` + whitelist) reads a printed dummy number correctly (`test_tesseract.py`, skipped where Tesseract is missing).
+- **Run on samples/** (`scripts/extract_report.py` → `eval/extract_report.md`, git-ignored, counts only): **with `CE_PROVIDER=fake` only** (no API key here) and real Tesseract. 2 files, 48 forms, 0 failed, 304 s. Model calls: 10 for segmentation (as in Phase 3) + 96 to read the forms (classify + extract, 2 per form) = 106. Every field "filled" in 48 of 48 forms, 48 central and 48 commitment items — **these are the fake provider's fixed dummy values, not readings of the pages**, so they say nothing about real filling rates. The fake gives no boxes, so all 144 numeric fields came out `ocr_unavailable` and `reread_unavailable` and no second look was made. What the run does show: the whole chain (segmentation → concurrent reading → OCR check → second look → report) runs on the real scans without errors. To run with a real model: `CE_PROVIDER=gemini GEMINI_API_KEY=... CE_TESSERACT_CMD=... TESSDATA_PREFIX=C:/Users/Public/tessdata .venv/Scripts/python scripts/extract_report.py`.
+
+### Phase 5 — what does not work / was not checked
+- **Not run with a real model**: this environment has no `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` and no Ollama server. Whether a real model returns usable boxes, sensible `legible`/`source` values and follows the rules is unknown; so is the share of OCR agreement and second looks on real output.
+- The 15% box-area limit, 10 px padding, 2.5× enlargement and the cap of 8 second looks are chosen by hand, not fitted.
+- `local_vlm` is a base: request/response shape tested against a mock only; the default model name is an assumption.
+- OCR checks digits only; a commitment number with letters is never cross-checked (`ocr_unavailable`).
+- Names and dates get no second look (the narrow prompt is digits-only).
+- The UI and the Excel file do not show `FormGroup.error` or the signals yet; a failed form shows only as a flagged, empty row.
+- Two forms that fail with different errors are reported on the job with the first error only.
+
+### Phase 5 changes to existing interfaces
+- `ExtractionProvider.extract_form` returns `FormReading` (was `Commitment`); `reread_field(pages, field_name, form_type) -> list[str]` is replaced by `read_number(crop) -> NumberReading`. New `RetryableProviderError(ProviderError)`: Claude/Gemini/local timeouts and connection errors, and Claude HTTP 408/429/5xx/529, now raise it (existing `except ProviderError` still catches them). Claude: `max_tokens` 2048 → 4096, and an answer cut off at `max_tokens` is an error.
+- `common.py`: `COMMITMENT_SCHEMA`, `READINGS_SCHEMA`, `commitment_from_output`, `readings_from_output`, `extract_instruction`, `reread_instruction`, `UNPARSED_DATE_REASON` removed → `FORM_READING_SCHEMA`, `NUMBER_SCHEMA`, `form_reading_from_output`, `number_from_output`, `encode_image`; prompts in `providers/prompts.py` + `backend/prompts/`. Provider constructors take an optional `prompts`; `LocalVlmProvider(base_url, model, timeout_s)`.
+- `extract.extract(pages, form_type, provider)` → `extract.to_commitment(reading, pages, form_type)`; the provider call moved to `read_form.FormReader`. `Orchestrator.run` now runs its own event loop (`asyncio.run`), so it must not be called from inside a running loop (FastAPI runs it in a worker thread, which is fine).
+- `OcrEngine`: new method `read_line(image, allowed_chars) -> OcrLine`.
+- Schema: `Field.signals` (new `FieldSignal`, `SignalSource`), `FormGroup.vlm_calls` and `FormGroup.error`, `FormGroup.needs_review` also covers `extraction_failed`; new models `RelativeBox`, `FieldReading`, `FormReading`, `NumberReading`. All are inside `commitments.data_json`, so SQLite needs no schema change.
+- New settings (table above), new dependency `tenacity`, the Docker image copies `backend/prompts`.
 
 ## Storage
 - **Interface:** `app/storage/base.py` defines the `JobStore` Protocol (`init`, `create`, `get`, `update`, `delete`, `list_commitments`, `fail_interrupted`, `purge_expired`); `create_job_store(settings, tmp)` builds `SqliteJobStore` (`storage/sqlite.py`) or `MemoryJobStore` (`storage/memory.py`). The API endpoints did not change.

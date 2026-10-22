@@ -29,6 +29,14 @@ class OcrWord:
     height: int
 
 
+@dataclass(frozen=True)
+class OcrLine:
+    """One line of text read from a crop. Holds patient data — never log ``text``."""
+
+    text: str  # words joined by single spaces; empty if nothing was read
+    confidence: float  # 0..1, mean over the words; 0 if nothing was read
+
+
 @runtime_checkable
 class OcrEngine(Protocol):
     def detect_orientation(self, image: np.ndarray) -> OrientationGuess:
@@ -43,4 +51,9 @@ class OcrEngine(Protocol):
     def read_words(self, image: np.ndarray) -> list[OcrWord]:
         """Every word on a (binarized) page, in reading order, with its box
         in ``image`` pixels; raises ``OcrError`` if recognition fails."""
+        ...
+
+    def read_line(self, image: np.ndarray, allowed_chars: str) -> OcrLine:
+        """Read a crop as a single line of text made only of ``allowed_chars``;
+        raises ``OcrError`` if recognition fails."""
         ...

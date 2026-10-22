@@ -23,4 +23,5 @@ frontend/dist/
 *.xlsx
 eval/report.md
 eval/classify_report.md
+eval/extract_report.md
 predictions.csv

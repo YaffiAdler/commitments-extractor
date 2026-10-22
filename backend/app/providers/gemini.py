@@ -3,7 +3,9 @@
 Structured output is obtained with ``responseMimeType: application/json`` and
 ``responseJsonSchema`` set to the shared output schema (``common.py``). Error
 messages carry the HTTP status or the API's finish/block reason only, never
-response bodies or field values.
+response bodies or field values. Overload (503) and rate limit (429) are
+retried here; a timeout or connection error raises ``RetryableProviderError``
+for the caller to retry (``app/pipeline/calls.py``).
 """
 from __future__ import annotations
 
@@ -14,27 +16,27 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
+import numpy as np
 
 from app.pipeline.ingest import PageImage
-from app.providers.base import ProviderError
+from app.providers.base import ProviderError, RetryableProviderError
 from app.providers.common import (
-    COMMITMENT_SCHEMA,
     COMPARE_PAGES_INSTRUCTION,
+    FORM_READING_SCHEMA,
     JPEG_MEDIA_TYPE,
+    NUMBER_SCHEMA,
     PAGE_RELATION_SCHEMA,
-    READINGS_SCHEMA,
     SYSTEM_PROMPT,
     classify_instruction,
-    commitment_from_output,
-    encode_page,
-    extract_instruction,
+    encode_image,
     form_classification_from_output,
     form_classification_schema,
+    form_reading_from_output,
+    number_from_output,
     page_relation_from_output,
-    readings_from_output,
-    reread_instruction,
 )
-from app.schemas import Commitment, FormClassification, FormType, PageRelation
+from app.providers.prompts import Prompts
+from app.schemas import FormClassification, FormReading, FormType, NumberReading, PageRelation
 
 API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 API_KEY_ENV = "GEMINI_API_KEY"
@@ -52,8 +54,8 @@ MAX_ATTEMPTS = 4
 RETRY_BASE_DELAY_S = 2.0
 
 
-def _image_parts(pages: list[PageImage]) -> list[dict[str, Any]]:
-    return [{"inlineData": {"mimeType": JPEG_MEDIA_TYPE, "data": encode_page(p)}} for p in pages]
+def _image_parts(images: list[np.ndarray]) -> list[dict[str, Any]]:
+    return [{"inlineData": {"mimeType": JPEG_MEDIA_TYPE, "data": encode_image(image)}} for image in images]
 
 
 def _output_json(payload: dict[str, Any]) -> dict[str, Any]:
@@ -81,33 +83,36 @@ class GeminiProvider:
     name = "gemini"
 
     def __init__(self, model: str, timeout_s: float, client: httpx.Client | None = None,
-                 sleep: Callable[[float], None] = time.sleep) -> None:
+                 sleep: Callable[[float], None] = time.sleep, prompts: Prompts | None = None) -> None:
         self._model = model
         self._url = API_URL_TEMPLATE.format(model=model)
         self._client = client or httpx.Client(timeout=timeout_s)
         self._sleep = sleep
+        self._prompts = prompts or Prompts.load()
 
-    def extract_form(self, pages: list[PageImage], form_type: FormType | None) -> Commitment:
-        return commitment_from_output(self._generate_json(pages, extract_instruction(form_type), COMMITMENT_SCHEMA))
+    def extract_form(self, pages: list[PageImage], form_type: FormType | None) -> FormReading:
+        data = self._generate_json([p.image for p in pages], self._prompts.extract(form_type), FORM_READING_SCHEMA)
+        return form_reading_from_output(data)
 
-    def reread_field(self, pages: list[PageImage], field_name: str, form_type: FormType | None) -> list[str]:
-        return readings_from_output(self._generate_json(pages, reread_instruction(field_name), READINGS_SCHEMA))
+    def read_number(self, crop: np.ndarray) -> NumberReading:
+        return number_from_output(self._generate_json([crop], self._prompts.read_number, NUMBER_SCHEMA))
 
     def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:
-        data = self._generate_json(pages, classify_instruction(form_types), form_classification_schema(form_types))
+        data = self._generate_json([p.image for p in pages], classify_instruction(form_types),
+                                   form_classification_schema(form_types))
         return form_classification_from_output(data, form_types)
 
     def compare_pages(self, page_a: PageImage, page_b: PageImage) -> PageRelation:
         return page_relation_from_output(
-            self._generate_json([page_a, page_b], COMPARE_PAGES_INSTRUCTION, PAGE_RELATION_SCHEMA))
+            self._generate_json([page_a.image, page_b.image], COMPARE_PAGES_INSTRUCTION, PAGE_RELATION_SCHEMA))
 
-    def _generate_json(self, pages: list[PageImage], instruction: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def _generate_json(self, images: list[np.ndarray], instruction: str, schema: dict[str, Any]) -> dict[str, Any]:
         api_key = os.environ.get(API_KEY_ENV)
         if not api_key:
             raise ProviderError(f"{API_KEY_ENV} is not set")
         body = {
             "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-            "contents": [{"role": "user", "parts": [*_image_parts(pages), {"text": instruction}]}],
+            "contents": [{"role": "user", "parts": [*_image_parts(images), {"text": instruction}]}],
             "generationConfig": {
                 "responseMimeType": JSON_MIME_TYPE,
                 "responseJsonSchema": schema,
@@ -133,6 +138,6 @@ class GeminiProvider:
         try:
             return self._client.post(self._url, json=body, headers=headers)
         except httpx.TimeoutException as exc:
-            raise ProviderError("Gemini API timed out") from exc
+            raise RetryableProviderError("Gemini API timed out") from exc
         except httpx.HTTPError as exc:
-            raise ProviderError(f"Gemini API request failed: {type(exc).__name__}") from exc
+            raise RetryableProviderError(f"Gemini API request failed: {type(exc).__name__}") from exc

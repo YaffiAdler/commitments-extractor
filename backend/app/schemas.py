@@ -49,6 +49,26 @@ class BBox(BaseModel):
         return self
 
 
+class SignalSource(str, Enum):
+    """Who produced one reading of a field."""
+
+    VLM = "vlm"        # the full-form extraction call
+    OCR = "ocr"        # Tesseract on the field's crop (printed numbers only)
+    REREAD = "reread"  # a second, narrow vision-model call on the enlarged crop
+
+
+class FieldSignal(BaseModel):
+    """One independent reading of a field, kept next to the value and never
+    written over it. Holds patient data (``value``) and model text that may
+    quote the page (``note``) — never log either."""
+
+    source: SignalSource
+    value: Optional[str] = None
+    confidence: Optional[float] = PydField(default=None, ge=0.0, le=1.0, description="OCR only")
+    legible: Optional[bool] = None
+    note: Optional[str] = None
+
+
 class Field(BaseModel, Generic[T]):
     """One extracted value plus everything needed to trust or review it.
 
@@ -56,7 +76,9 @@ class Field(BaseModel, Generic[T]):
     ``raw_value`` is the text as read. ``reasons`` lists machine-readable
     codes that explain the confidence, e.g. ``"not_found"``,
     ``"id_checksum_failed"`` (a soft signal only), ``"ocr_low_score"``,
-    ``"handwritten"``, ``"conflicting_candidates"``.
+    ``"handwritten"``, ``"conflicting_candidates"``. ``signals`` holds every
+    independent reading (model, OCR, second look) for the confidence stage
+    and for a reviewer.
     """
 
     value: Optional[T] = None
@@ -66,6 +88,7 @@ class Field(BaseModel, Generic[T]):
     reasons: list[str] = PydField(default_factory=list)
     source: FieldSource = FieldSource.NONE
     bbox: Optional[BBox] = None
+    signals: list[FieldSignal] = PydField(default_factory=list)
 
     @model_validator(mode="after")
     def _missing_is_flagged(self) -> "Field[T]":
@@ -119,8 +142,61 @@ class Commitment(BaseModel):
         )
 
 
+class RelativeBox(BaseModel):
+    """A box as a vision model reports it: fractions (0..1) of the width and
+    height of one of the images it was sent. Not validated here — the
+    pipeline decides whether a box is plausible enough to crop."""
+
+    page: int = PydField(default=0, description="0-based index among the images sent")
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+ReadingSource = Literal["printed", "handwritten", "sticker", "stamp"]
+
+
+class FieldReading(BaseModel):
+    """One value as the vision model read it, before any checking.
+
+    ``value`` is copied as seen (None if absent or unclear); ``legible`` is
+    False for a value that is cut off, smudged or partly hidden (``value`` then
+    holds the part that is visible, if any). ``note`` is model text that may
+    quote the page — never logged.
+    """
+
+    value: Optional[str] = None
+    bbox: Optional[RelativeBox] = None
+    legible: bool = True
+    source: ReadingSource = "printed"
+    note: Optional[str] = None
+
+
+class FormReading(BaseModel):
+    """The raw answer of ``ExtractionProvider.extract_form`` for one form:
+    one reading per ``Commitment`` field, lists for the fields that may occur
+    several times (one item per sticker / number)."""
+
+    first_name: FieldReading = PydField(default_factory=FieldReading)
+    last_name: FieldReading = PydField(default_factory=FieldReading)
+    id_number: FieldReading = PydField(default_factory=FieldReading)
+    central_numbers: list[FieldReading] = PydField(default_factory=list)
+    received_date: FieldReading = PydField(default_factory=FieldReading)
+    sender: FieldReading = PydField(default_factory=FieldReading)
+    commitment_numbers: list[FieldReading] = PydField(default_factory=list)
+
+
+class NumberReading(BaseModel):
+    """The answer of ``ExtractionProvider.read_number`` on one enlarged crop:
+    the digits seen, or None."""
+
+    value: Optional[str] = None
+
+
 SPLIT_UNCERTAIN = "split_uncertain"
 FORM_TYPE_UNKNOWN = "form_type_unknown"
+EXTRACTION_FAILED = "extraction_failed"
 
 
 class FormGroup(BaseModel):
@@ -132,7 +208,9 @@ class FormGroup(BaseModel):
     threshold ``split_reasons`` holds ``"split_uncertain"`` (the form may be
     split wrongly), next to codes for how the boundaries were decided.
     ``form_reasons`` holds flags about the form as a whole, e.g.
-    ``"form_type_unknown"`` (no known layout matched; read with ``generic.yaml``).
+    ``"form_type_unknown"`` (no known layout matched; read with ``generic.yaml``)
+    or ``"extraction_failed"`` (reading the form failed; ``error`` holds the
+    exception type only, and the other forms of the job are still read).
     """
 
     id: str = PydField(default_factory=lambda: uuid4().hex)
@@ -143,11 +221,13 @@ class FormGroup(BaseModel):
     split_reasons: list[str] = PydField(default_factory=list)
     form_reasons: list[str] = PydField(default_factory=list)
     commitment: Commitment = PydField(default_factory=Commitment)
+    vlm_calls: int = PydField(default=0, ge=0, description="provider calls made to read this form, retries included")
+    error: Optional[str] = PydField(default=None, description="exception type only; must not contain field values")
 
     @property
     def needs_review(self) -> bool:
         return (self.commitment.needs_review or SPLIT_UNCERTAIN in self.split_reasons
-                or FORM_TYPE_UNKNOWN in self.form_reasons)
+                or FORM_TYPE_UNKNOWN in self.form_reasons or EXTRACTION_FAILED in self.form_reasons)
 
 
 class IrrelevantPage(BaseModel):
