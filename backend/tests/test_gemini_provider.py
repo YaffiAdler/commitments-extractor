@@ -241,3 +241,22 @@ def test_debug_logs_the_cause_of_a_timeout(api_key, caplog):
         _debug_provider(handler).extract_form([_page()], None)
     (line,) = _diagnostic_lines(caplog)
     assert "http=None" in line and "transport_error=ReadTimeout" in line
+
+
+def test_key_pasted_with_a_line_break_is_sent_stripped(monkeypatch):
+    monkeypatch.setenv(API_KEY_ENV, "dummy\n")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers[API_KEY_HEADER] == "dummy"
+        return httpx.Response(200, json=_answer(DUMMY_OUTPUT))
+
+    assert _provider(handler).extract_form([_page()], None).id_number.value == "000000018"
+
+
+def test_request_refused_before_sending_is_not_retryable(api_key):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.LocalProtocolError("illegal header value")
+
+    with pytest.raises(ProviderError, match="LocalProtocolError") as info:
+        _provider(handler).extract_form([_page()], None)
+    assert not isinstance(info.value, RetryableProviderError)

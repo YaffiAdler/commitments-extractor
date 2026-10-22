@@ -14,6 +14,7 @@ from app.providers.common import (
     MAX_IMAGE_EDGE_PX,
     NUMBER_SCHEMA,
     PAGE_RELATION_SCHEMA,
+    api_key_from_env,
     encode_page,
     form_classification_from_output,
     form_classification_schema,
@@ -120,3 +121,29 @@ def test_page_relation_schema_matches_the_model():
 def test_page_relation_missing_key_is_provider_error():
     with pytest.raises(ProviderError):
         page_relation_from_output({"same_form": True})
+
+
+KEY_ENV = "CE_TEST_DUMMY_API_KEY"
+
+
+def test_api_key_is_stripped_of_a_pasted_line_break(monkeypatch):
+    monkeypatch.setenv(KEY_ENV, "  dummy-key\r\n")
+    assert api_key_from_env(KEY_ENV) == "dummy-key"
+
+
+@pytest.mark.parametrize("value", [None, "", "  \n"])
+def test_missing_api_key_names_the_variable(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv(KEY_ENV, raising=False)
+    else:
+        monkeypatch.setenv(KEY_ENV, value)
+    with pytest.raises(ProviderError, match=f"{KEY_ENV} is not set"):
+        api_key_from_env(KEY_ENV)
+
+
+@pytest.mark.parametrize("value", ["dummy key", "dummy\nkey", "dummy\u05d0"])
+def test_api_key_unfit_for_a_header_is_refused_without_the_key(monkeypatch, value):
+    monkeypatch.setenv(KEY_ENV, value)
+    with pytest.raises(ProviderError, match=KEY_ENV) as info:
+        api_key_from_env(KEY_ENV)
+    assert "dummy" not in str(info.value)

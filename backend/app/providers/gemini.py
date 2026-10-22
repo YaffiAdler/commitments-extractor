@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -28,6 +27,7 @@ from app.providers.common import (
     NUMBER_SCHEMA,
     PAGE_RELATION_SCHEMA,
     SYSTEM_PROMPT,
+    api_key_from_env,
     classify_instruction,
     encode_image,
     form_classification_from_output,
@@ -113,9 +113,7 @@ class GeminiProvider:
             self._generate_json([page_a.image, page_b.image], COMPARE_PAGES_INSTRUCTION, PAGE_RELATION_SCHEMA))
 
     def _generate_json(self, images: list[np.ndarray], instruction: str, schema: dict[str, Any]) -> dict[str, Any]:
-        api_key = os.environ.get(API_KEY_ENV)
-        if not api_key:
-            raise ProviderError(f"{API_KEY_ENV} is not set")
+        api_key = api_key_from_env(API_KEY_ENV)
         body = {
             "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
             "contents": [{"role": "user", "parts": [*_image_parts(images), {"text": instruction}]}],
@@ -150,6 +148,11 @@ class GeminiProvider:
             if self._debug:
                 self._log_call(body, attempt, started, None, exc)
             raise RetryableProviderError("Gemini API timed out") from exc
+        except httpx.LocalProtocolError as exc:
+            # The request was refused before sending (e.g. a bad header value): retrying cannot help.
+            if self._debug:
+                self._log_call(body, attempt, started, None, exc)
+            raise ProviderError(f"Gemini API request could not be built: {type(exc).__name__}") from exc
         except httpx.HTTPError as exc:
             if self._debug:
                 self._log_call(body, attempt, started, None, exc)

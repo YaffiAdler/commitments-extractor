@@ -9,6 +9,8 @@ sits in the response.
 from __future__ import annotations
 
 import base64
+import os
+import re
 from typing import Any, get_args
 
 import cv2
@@ -33,6 +35,8 @@ from app.schemas import (
 MAX_IMAGE_EDGE_PX = 2000
 JPEG_QUALITY = 85
 JPEG_MEDIA_TYPE = "image/jpeg"
+# An API key is sent as an HTTP header value: visible ASCII only, no spaces.
+_HEADER_SAFE_KEY = re.compile(r"[\x21-\x7e]+")
 
 LIST_FIELDS = ("central_numbers", "commitment_numbers")
 SCALAR_FIELDS = ("first_name", "last_name", "id_number", "received_date", "sender")
@@ -143,6 +147,19 @@ def classify_instruction(form_types: dict[str, FormType]) -> str:
         "null if no sender is visible.\n"
         f"{options}"
     )
+
+
+def api_key_from_env(env_name: str) -> str:
+    """The API key in ``env_name`` without surrounding whitespace (a key pasted
+    into a hosting dashboard often carries a trailing line break, which HTTP
+    refuses in a header). The error names the variable, never the key."""
+    key = os.environ.get(env_name, "").strip()
+    if not key:
+        raise ProviderError(f"{env_name} is not set")
+    if not _HEADER_SAFE_KEY.fullmatch(key):
+        raise ProviderError(f"{env_name} contains characters not allowed in an HTTP header "
+                            "(a space or line break pasted with the key?)")
+    return key
 
 
 def encode_image(image: np.ndarray) -> str:

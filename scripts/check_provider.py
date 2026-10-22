@@ -58,14 +58,12 @@ def main() -> int:
     provider = create_provider(settings)
     if isinstance(provider, gemini.GeminiProvider):
         key_env, model, timeout_s = gemini.API_KEY_ENV, settings.gemini_model, settings.gemini_timeout_s
-        text_only = lambda: provider._generate_json([], TEXT_ONLY_INSTRUCTION, NUMBER_SCHEMA)  # noqa: E731
     elif isinstance(provider, claude.ClaudeProvider):
         key_env, model, timeout_s = claude.API_KEY_ENV, settings.claude_model, settings.claude_timeout_s
-        text_only = lambda: provider._call_tool([], TEXT_ONLY_INSTRUCTION, "record_number",  # noqa: E731
-                                                "Record the value.", NUMBER_SCHEMA)
     else:
         print(f"CE_PROVIDER={settings.provider.value}: only gemini and claude make API calls")
         return 1
+    text_only = lambda: provider._generate_json([], TEXT_ONLY_INSTRUCTION, NUMBER_SCHEMA)  # noqa: E731
     key = os.environ.get(key_env, "")
     print(f"provider={settings.provider.value} model={model} http_timeout_s={timeout_s} "
           f"{key_env} {'set' if key else 'NOT SET'} (length {len(key)})")
