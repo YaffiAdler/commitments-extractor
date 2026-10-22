@@ -69,9 +69,10 @@ def _reading(description: str) -> dict[str, Any]:
             "bbox": _RELATIVE_BOX,
             "legible": {"type": "boolean", "description": "false if cut off, smudged or covered"},
             "source": {"type": "string", "enum": list(get_args(ReadingSource))},
-            "note": {**_NULLABLE_STRING, "description": "only if something is unusual; no names or numbers"},
+            # Optional rather than nullable: Claude's structured outputs allow at most 16 nullable fields.
+            "note": {"type": "string", "description": "only if something is unusual; no names or numbers"},
         },
-        "required": ["value", "bbox", "legible", "source", "note"],
+        "required": ["value", "bbox", "legible", "source"],
     }
 
 

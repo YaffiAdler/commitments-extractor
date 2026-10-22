@@ -211,7 +211,7 @@ With `CE_DEMO_ACCESS_TOKEN` set, every endpoint but `/health` answers 401 `acces
 10. *(Superseded by 25.)* **One file = one form.** Segmentation is not implemented yet, so all pages of an uploaded file are sent as a single form and produce a single row. A multi-form scan therefore gives one (wrong) row until Phase "segment".
 11. *(Superseded by Phase 7, 60–70.)* **No confidence yet.** Every extracted field keeps `confidence=0` and `needs_review=True` (highlighted) because scoring is not wired. The provider never sets confidence.
 12. *(Superseded by 24.)* **Jobs are kept in memory** (lost on restart); leftover job directories on disk are deleted at startup and on access once older than the TTL. TTL is checked lazily on requests, not by a timer.
-13. **Claude provider** uses the Messages API over `httpx` with a forced tool call for structured JSON output. Pages are downscaled to at most 2000 px and sent as JPEG (minimal data out). A date the model cannot give as `YYYY-MM-DD` stays empty with reason `unparsed_date`. Errors carry only the HTTP status, never the response body.
+13. *(Structured output part superseded by 120.)* **Claude provider** uses the Messages API over `httpx` with a forced tool call for structured JSON output. Pages are downscaled to at most 2000 px and sent as JPEG (minimal data out). A date the model cannot give as `YYYY-MM-DD` stays empty with reason `unparsed_date`. Errors carry only the HTTP status, never the response body.
 14. *(Superseded by 15.)* Upload validation used to check the `%PDF-` header only.
 
 ## Assumptions (Phase 2)
@@ -527,6 +527,15 @@ With `CE_DEMO_ACCESS_TOKEN` set, every endpoint but `/health` answers 401 `acces
 ### Lab system check changes to existing interfaces
 - `main.create_app(settings, provider, lab_connector=None)`: new optional argument. `Settings`: new `lab_connector`, `lab_demo_samples_path`, `lab_match_margin_days`; new `config.LabConnectorName`.
 - New package `app/lab_system/`; new endpoint `GET /jobs/{id}/lab-match`. Frontend: `api.getLabMatch`, `components/LabMatchCard.tsx`.
+
+## Assumptions (Claude structured output)
+120. **Claude answers through structured outputs, not a forced tool call.** `claude-opus-5-5` (the `CE_CLAUDE_MODEL` default) rejects `tool_choice` `"tool"`/`"any"` with HTTP 400, so every call sends `output_config.format` (`json_schema`) and parses the response's text block as JSON. The schema sent is the shared one from `common.py` with `additionalProperties: false` on every object, and object subschemas that occur more than once (the 9 field readings) moved to `$defs` and referenced: written out in full, the API refuses the form schema as too large. The shared schemas are not changed for Gemini. `max_tokens` is 16000 (thinking is always on and counts towards it). A `refusal` stop reason, a response without a text block and invalid JSON are `ProviderError`s; the JSON error is not chained, since its message would quote the answer.
+121. **`note` is optional, not nullable,** in the field-reading schema (both providers): structured outputs allow at most 16 nullable fields, and the 7 readings had 21. A missing note reads as `None`, as before.
+
+### Claude structured output changes to existing interfaces
+- `ClaudeProvider._call_tool(images, instruction, tool_name, tool_description, schema)` → `_generate_json(images, instruction, schema)`, the same signature as `GeminiProvider`; `scripts/check_provider.py` calls it for both. The debug log line no longer has `tool=`.
+- `claude.MAX_TOKENS` 4096 → 16000.
+- `common.FORM_READING_SCHEMA`: `note` is no longer required and is `string` instead of `string | null`.
 
 ## Storage
 - **Interface:** `app/storage/base.py` defines the `JobStore` Protocol (`init`, `close`, `create`, `get`, `update`, `delete`, `list_commitments`, `fail_interrupted`, `purge_expired`); `create_job_store(settings, tmp)` builds `PostgresJobStore` (`storage/postgres.py`), `SqliteJobStore` (`storage/sqlite.py`) or `MemoryJobStore` (`storage/memory.py`). Both SQL stores share all queries (`storage/sql.py`); they differ only in the connection (SQLite: one per operation; Postgres: a `psycopg_pool` pool) and the migration lock.

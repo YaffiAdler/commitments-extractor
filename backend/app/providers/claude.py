@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections import Counter
 from typing import Any
 
 import httpx
@@ -51,6 +52,8 @@ MAX_TOKENS = 16000
 STOP_REASON_MAX_TOKENS = "max_tokens"
 STOP_REASON_REFUSAL = "refusal"
 JSON_SCHEMA_FORMAT = "json_schema"
+DEFINITIONS_KEY = "$defs"
+DESCRIPTION_KEY = "description"
 OVERLOADED_STATUS = 529  # Anthropic-specific
 RETRYABLE_STATUSES = frozenset({
     httpx.codes.REQUEST_TIMEOUT, httpx.codes.TOO_MANY_REQUESTS, httpx.codes.INTERNAL_SERVER_ERROR,
@@ -76,6 +79,55 @@ def _closed_schema(schema: Any) -> Any:
     if "properties" in closed:
         closed["additionalProperties"] = False
     return closed
+
+
+def _shape(schema: dict[str, Any]) -> str:
+    """An object subschema without its own description: equal shapes can share one definition."""
+    return json.dumps({key: value for key, value in schema.items() if key != DESCRIPTION_KEY}, sort_keys=True)
+
+
+def _count_object_shapes(schema: Any, counts: Counter[str]) -> None:
+    if isinstance(schema, list):
+        for item in schema:
+            _count_object_shapes(item, counts)
+    elif isinstance(schema, dict):
+        if "properties" in schema:
+            counts[_shape(schema)] += 1
+        for value in schema.values():
+            _count_object_shapes(value, counts)
+
+
+def _with_shared_definitions(schema: dict[str, Any]) -> dict[str, Any]:
+    """``schema`` with every object subschema that occurs more than once moved
+    to ``$defs`` and referenced (keeping each place's description): written
+    out in full, the form schema compiles to a grammar the API refuses as too large."""
+    counts: Counter[str] = Counter()
+    _count_object_shapes(schema.get("properties", {}), counts)
+    definitions: dict[str, tuple[str, dict[str, Any]]] = {}
+
+    def share(node: Any) -> Any:
+        if isinstance(node, list):
+            return [share(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        shape = _shape(node) if "properties" in node else None
+        if shape is None or counts[shape] < 2:
+            return {key: share(value) for key, value in node.items()}
+        name, _ = definitions.setdefault(shape, (f"object_{len(definitions)}", json.loads(shape)))
+        reference = {"$ref": f"#/{DEFINITIONS_KEY}/{name}"}
+        if DESCRIPTION_KEY in node:
+            reference[DESCRIPTION_KEY] = node[DESCRIPTION_KEY]
+        return reference
+
+    shared = {key: share(value) if key == "properties" else value for key, value in schema.items()}
+    if definitions:
+        shared[DEFINITIONS_KEY] = dict(definitions.values())
+    return shared
+
+
+def _output_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The schema sent as ``output_config.format``."""
+    return _with_shared_definitions(_closed_schema(schema))
 
 
 class ClaudeProvider:
@@ -110,7 +162,7 @@ class ClaudeProvider:
             "model": self._model,
             "max_tokens": MAX_TOKENS,
             "system": SYSTEM_PROMPT,
-            "output_config": {"format": {"type": JSON_SCHEMA_FORMAT, "schema": _closed_schema(schema)}},
+            "output_config": {"format": {"type": JSON_SCHEMA_FORMAT, "schema": _output_schema(schema)}},
             "messages": [{"role": "user", "content": [*_image_blocks(images), {"type": "text", "text": instruction}]}],
         }
         headers = {"x-api-key": api_key, "anthropic-version": API_VERSION, "content-type": "application/json"}

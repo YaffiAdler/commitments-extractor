@@ -67,7 +67,8 @@ def test_form_reading_outside_schema_is_provider_error_without_values():
 def test_form_reading_schema_matches_the_model():
     assert set(FORM_READING_SCHEMA["required"]) == set(FormReading.model_fields)
     item = FORM_READING_SCHEMA["properties"]["central_numbers"]["items"]
-    assert set(item["required"]) == set(FieldReading.model_fields)
+    assert set(item["properties"]) == set(FieldReading.model_fields)
+    assert set(item["properties"]) - set(item["required"]) == {"note"}
     assert tuple(item["properties"]["source"]["enum"]) == get_args(ReadingSource)
 
 
