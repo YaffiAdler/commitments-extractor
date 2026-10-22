@@ -74,8 +74,9 @@ def test_form_type_yaml_structure(path):
     assert doc["certainty"] in {"certain", "uncertain"}
     assert isinstance(doc["detect"]["keywords"], list) and "logo_hint" in doc["detect"]
     assert set(doc["fields"]) == REQUIRED_FIELDS
-    for spec in doc["fields"].values():
-        assert set(spec) == {"labels", "hint", "multiple", "handwritten_possible"}
+    for name, spec in doc["fields"].items():
+        assert set(spec) - {"pattern"} == {"labels", "hint", "multiple", "handwritten_possible"}
+        assert "pattern" not in spec or name == "commitment_numbers"
     assert isinstance(doc["pages"]["typical"], int)
 
 

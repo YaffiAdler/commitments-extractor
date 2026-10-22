@@ -1,13 +1,14 @@
 """One form through classify -> extract -> OCR check -> second look, with the
 fake provider and scripted OCR: the extraction edge cases end to end."""
 import asyncio
+from datetime import date
 
 from form_fakes import LineOcr, blank_page, value_box
 from app.config import ExtractionSettings, Settings
 from app.pipeline.calls import ProviderCalls
 from app.pipeline.classify import SenderMatcher, load_form_types, load_generic_form_type
 from app.pipeline.extract import ILLEGIBLE
-from app.pipeline.normalize import load_senders
+from app.pipeline.normalize import DATE_TWO_DIGIT_YEAR, ID_PADDED, load_senders
 from app.pipeline.ocr_check import OCR_AGREES, OCR_DISAGREES
 from app.pipeline.read_form import FormReader
 from app.pipeline.reread import REREAD_AGREES, REREAD_DISAGREES
@@ -90,3 +91,16 @@ def test_printed_value_that_ocr_could_not_read_gets_a_second_look():
     group, count = _read(FakeProvider(reading=reading, numbers=["000000018"]), LineOcr(""))
     assert REREAD_AGREES in group.commitment.id_number.reasons
     assert count == 3
+
+
+def test_values_are_normalized_after_the_checks():
+    reading = FormReading(id_number=FieldReading(value="1234567-8"),
+                          received_date=FieldReading(value="15.03.25", source="stamp"),
+                          central_numbers=[FieldReading(value="012 345", source="sticker")])
+    group, _ = _read(FakeProvider(reading=reading))
+    commitment = group.commitment
+    assert (commitment.id_number.value, commitment.id_number.raw_value) == ("012345678", "1234567-8")
+    assert ID_PADDED in commitment.id_number.reasons
+    assert commitment.received_date.value == date(2025, 3, 15)
+    assert DATE_TWO_DIGIT_YEAR in commitment.received_date.reasons
+    assert [f.value for f in commitment.central_numbers] == ["012345"]

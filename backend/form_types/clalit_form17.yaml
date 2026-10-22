@@ -54,5 +54,6 @@ fields:
     hint: 'In the title: ''...לטיפולים אמבולטוריים מספר:'' + 9 digits.'
     multiple: false
     handwritten_possible: false
+    pattern: '[0-9]{9}'
 pages:
   typical: 1

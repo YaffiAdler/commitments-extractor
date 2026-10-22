@@ -1,9 +1,10 @@
 """Run the pipeline stages over the files of one job.
 
 Wired so far: ingest -> preprocess -> segment -> (per form, concurrently)
-classify -> extract -> OCR cross-check -> second look. normalize and
-confidence are not wired in yet, so every field except a matched sender stays
-at confidence 0 / needs review.
+classify -> extract -> OCR cross-check -> second look -> normalize; then the
+forms of the whole job are compared for duplicate central numbers. confidence
+is not wired in yet, so every field except a matched sender stays at
+confidence 0 / needs review.
 
 A form that fails is marked (``FormGroup.error``, ``extraction_failed``) and
 the other forms are still read; the job fails only if every form failed.
@@ -16,7 +17,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.ocr.base import OcrEngine
-from app.pipeline import classify, ingest, preprocess, segment
+from app.pipeline import classify, ingest, normalize, preprocess, segment
 from app.pipeline.calls import ProviderCalls
 from app.pipeline.ingest import PageImage
 from app.pipeline.read_form import FormReader
@@ -64,6 +65,7 @@ class Orchestrator:
             job.status = JobStatus.FAILED
             job.error = type(exc).__name__
             raise
+        normalize.flag_duplicate_centrals(job.groups)
         if job.groups and all(group.error for group in job.groups):
             job.status, job.error = JobStatus.FAILED, job.groups[0].error
             return job

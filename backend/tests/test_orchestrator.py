@@ -8,7 +8,7 @@ from app.pipeline.orchestrator import Orchestrator
 from app.providers import fake
 from app.providers.base import ProviderError
 from app.providers.fake import FakeProvider
-from app.schemas import EXTRACTION_FAILED, FORM_TYPE_UNKNOWN, Job, JobStatus, PageRelation
+from app.schemas import CENTRAL_DUPLICATE, EXTRACTION_FAILED, FORM_TYPE_UNKNOWN, Job, JobStatus, PageRelation
 
 
 def _build(provider: FakeProvider) -> Orchestrator:
@@ -163,3 +163,17 @@ def test_provider_calls_are_counted_per_form(tmp_path, monkeypatch):
     monkeypatch.setenv("CE_RENDER_DPI", "72")
     job = _orchestrator(monkeypatch).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 2)])
     assert [g.vlm_calls for g in job.groups] == [2, 2]  # classify + extract
+
+
+def test_forms_sharing_a_central_number_are_flagged(tmp_path, monkeypatch):
+    # The fake provider gives every form the same dummy central number.
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    job = _orchestrator(monkeypatch).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 2)])
+    assert all(CENTRAL_DUPLICATE in g.form_reasons for g in job.groups) and len(job.groups) == 2
+    assert all(g.needs_review for g in job.groups)
+
+
+def test_a_single_form_is_not_a_duplicate(tmp_path, monkeypatch):
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    job = _orchestrator(monkeypatch).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 1)])
+    assert CENTRAL_DUPLICATE not in job.groups[0].form_reasons

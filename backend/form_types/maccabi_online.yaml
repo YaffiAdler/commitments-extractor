@@ -57,5 +57,6 @@ fields:
     hint: 9 digits; appears 3 times (title, barcode, appendix) — same number, must be deduplicated.
     multiple: false
     handwritten_possible: false
+    pattern: '[0-9]{9}'
 pages:
   typical: 2

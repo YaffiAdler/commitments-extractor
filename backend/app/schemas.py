@@ -9,6 +9,7 @@ Design rules encoded here (see README):
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Generic, Literal, Optional, TypeVar
@@ -197,6 +198,11 @@ class NumberReading(BaseModel):
 SPLIT_UNCERTAIN = "split_uncertain"
 FORM_TYPE_UNKNOWN = "form_type_unknown"
 EXTRACTION_FAILED = "extraction_failed"
+CENTRAL_DUPLICATE = "central_duplicate"
+
+
+# Form-level reasons that put the whole form in review.
+REVIEW_FORM_REASONS = (FORM_TYPE_UNKNOWN, EXTRACTION_FAILED, CENTRAL_DUPLICATE)
 
 
 class FormGroup(BaseModel):
@@ -210,7 +216,8 @@ class FormGroup(BaseModel):
     ``form_reasons`` holds flags about the form as a whole, e.g.
     ``"form_type_unknown"`` (no known layout matched; read with ``generic.yaml``)
     or ``"extraction_failed"`` (reading the form failed; ``error`` holds the
-    exception type only, and the other forms of the job are still read).
+    exception type only, and the other forms of the job are still read), or
+    ``"central_duplicate"`` (another form of the job has the same central number).
     """
 
     id: str = PydField(default_factory=lambda: uuid4().hex)
@@ -227,7 +234,7 @@ class FormGroup(BaseModel):
     @property
     def needs_review(self) -> bool:
         return (self.commitment.needs_review or SPLIT_UNCERTAIN in self.split_reasons
-                or FORM_TYPE_UNKNOWN in self.form_reasons or EXTRACTION_FAILED in self.form_reasons)
+                or any(reason in self.form_reasons for reason in REVIEW_FORM_REASONS))
 
 
 class IrrelevantPage(BaseModel):
@@ -302,6 +309,10 @@ class Job(BaseModel):
 # --- Reference data: backend/form_types/*.yaml and backend/data/senders.json ---
 
 
+# Fields whose YAML spec may carry a ``pattern`` (checked by the normalize stage).
+PATTERN_FIELDS = frozenset({"commitment_numbers"})
+
+
 class FieldSpec(BaseModel):
     """How one Commitment field appears on a given form type."""
 
@@ -311,6 +322,17 @@ class FieldSpec(BaseModel):
     hint: str
     multiple: bool
     handwritten_possible: bool
+    # Optional regex the normalized value should fully match (a soft check; commitment_numbers only).
+    pattern: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _pattern_compiles(self) -> "FieldSpec":
+        if self.pattern is not None:
+            try:
+                re.compile(self.pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid pattern: {exc}") from exc
+        return self
 
 
 class FormTypeDetect(BaseModel):
@@ -344,6 +366,9 @@ class FormType(BaseModel):
         expected = set(Commitment.model_fields) - {"form_type_id"}
         if set(self.fields) != expected:
             raise ValueError(f"fields must be exactly {sorted(expected)}")
+        with_pattern = {name for name, spec in self.fields.items() if spec.pattern is not None}
+        if not with_pattern <= PATTERN_FIELDS:
+            raise ValueError(f"only {sorted(PATTERN_FIELDS)} may have a pattern")
         return self
 
 

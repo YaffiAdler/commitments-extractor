@@ -54,5 +54,6 @@ fields:
     hint: 'Below the title: ''התחייבות מספר'' + 9 digits. The 10-digit barcode on the right is not the commitment number.'
     multiple: false
     handwritten_possible: false
+    pattern: '[0-9]{9}'
 pages:
   typical: 1

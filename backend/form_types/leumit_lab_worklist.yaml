@@ -54,5 +54,6 @@ fields:
     hint: The 'דגימה:' number (9 digits) above a barcode — this is the commitment number at Leumit.
     multiple: true
     handwritten_possible: false
+    pattern: '[0-9]{9}'
 pages:
   typical: 1

@@ -17,7 +17,8 @@ A missing value stays empty and flagged (``not_found``). In the list fields
 an item without a value is dropped unless it is marked illegible (a sticker
 that is there but cannot be read); identical values are kept once.
 ``received_date`` must be a full date as written (``normalize.parse_date``),
-otherwise it stays empty with ``unparsed_date`` and the text in ``raw_value``.
+otherwise it stays empty with ``unparsed_date`` and the text in ``raw_value``
+(stage 6 re-reads that text and may still parse it, e.g. a 2-digit year).
 Confidence is not set here — scoring belongs to the confidence stage.
 """
 from __future__ import annotations
@@ -25,7 +26,7 @@ from __future__ import annotations
 from datetime import date
 
 from app.pipeline.ingest import PageImage
-from app.pipeline.normalize import parse_date
+from app.pipeline.normalize import UNPARSED_DATE, parse_date
 from app.schemas import (
     BBox,
     Commitment,
@@ -41,7 +42,6 @@ from app.schemas import (
 
 ILLEGIBLE = "illegible"
 HANDWRITTEN = "handwritten"
-UNPARSED_DATE = "unparsed_date"
 BBOX_IMPLAUSIBLE = "bbox_implausible"
 
 # A box covering more of the page than this is not the box of one value.

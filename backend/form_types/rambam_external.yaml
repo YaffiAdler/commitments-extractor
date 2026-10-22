@@ -54,5 +54,6 @@ fields:
     hint: 9 digits; also a sticker '944 000351 2026' — same number. The form states that the sample number is the commitment number.
     multiple: false
     handwritten_possible: false
+    pattern: '[0-9]{9}'
 pages:
   typical: 1
