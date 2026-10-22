@@ -41,11 +41,17 @@ class PageImageStore:
         # cv2.imwrite cannot write to non-ASCII paths on Windows, so encode and write separately.
         path.write_bytes(encoded.tobytes())
 
+    def load_jpeg(self, job_id: str, source_file: str, page_no: int) -> bytes | None:
+        """The stored page as JPEG bytes, or None if it was never saved or is already deleted."""
+        try:
+            return self._path(job_id, source_file, page_no).read_bytes()
+        except FileNotFoundError:
+            return None
+
     def load(self, job_id: str, source_file: str, page_no: int) -> np.ndarray | None:
         """The stored page (BGR), or None if it was never saved or is already deleted."""
-        try:
-            data = self._path(job_id, source_file, page_no).read_bytes()
-        except FileNotFoundError:
+        data = self.load_jpeg(job_id, source_file, page_no)
+        if data is None:
             return None
         image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
         if image is None:

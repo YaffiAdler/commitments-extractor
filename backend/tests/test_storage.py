@@ -36,3 +36,15 @@ def test_purge_older_than(tmp_path):
 
 def test_purge_missing_root(tmp_path):
     assert TempStorage(tmp_path / "missing").purge_older_than(0) == []
+
+
+def test_clear_deletes_job_dirs_only(tmp_path):
+    storage = TempStorage(tmp_path)
+    job_ids = [uuid4().hex, uuid4().hex]
+    for job_id in job_ids:
+        storage.save_upload(job_id, b"%PDF-1.4")
+    other = tmp_path / "not-a-job"
+    other.mkdir()
+    assert sorted(storage.clear()) == sorted(job_ids)
+    assert [d.name for d in tmp_path.iterdir()] == ["not-a-job"]
+    assert TempStorage(tmp_path / "missing").clear() == []

@@ -181,3 +181,38 @@ def test_invalid_storage_limits_rejected(monkeypatch, name, value):
     monkeypatch.setenv(name, value)
     with pytest.raises(ValueError):
         Settings()
+
+
+@pytest.mark.parametrize("origins", ["*", "https://a.example.org/", "https://a.example.org/app", "a.example.org"])
+def test_allowed_origins_must_be_exact_origins(monkeypatch, origins):
+    monkeypatch.setenv("CE_ALLOWED_ORIGINS", origins)
+    with pytest.raises(ValueError, match="ALLOWED_ORIGINS"):
+        Settings()
+
+
+def test_access_token_required_but_missing(monkeypatch):
+    monkeypatch.setenv("CE_REQUIRE_ACCESS_TOKEN", "1")
+    monkeypatch.delenv("CE_DEMO_ACCESS_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="DEMO_ACCESS_TOKEN"):
+        Settings()
+
+
+def test_access_token_too_short(monkeypatch):
+    monkeypatch.setenv("CE_DEMO_ACCESS_TOKEN", "short")
+    with pytest.raises(ValueError, match="at least"):
+        Settings()
+
+
+def test_access_token_not_in_repr(monkeypatch):
+    monkeypatch.setenv("CE_DEMO_ACCESS_TOKEN", "dummy-demo-token-0123456789")
+    monkeypatch.setenv("CE_REQUIRE_ACCESS_TOKEN", "1")
+    settings = Settings()
+    assert settings.demo_access_token == "dummy-demo-token-0123456789"
+    assert "dummy-demo-token" not in repr(settings)
+
+
+@pytest.mark.parametrize("name", ["CE_RATE_LIMIT_PER_MINUTE", "CE_UPLOAD_LIMIT_PER_HOUR", "CE_TRUSTED_PROXY_HOPS"])
+def test_negative_rate_settings_rejected(monkeypatch, name):
+    monkeypatch.setenv(name, "-1")
+    with pytest.raises(ValueError):
+        Settings()

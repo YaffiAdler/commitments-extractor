@@ -16,9 +16,11 @@ def create_provider(settings: Settings) -> ExtractionProvider:
         return FakeProvider()
     prompts = Prompts.load(settings.prompts_dir, settings.prompt_version)
     if settings.provider is ProviderName.CLAUDE:
-        return ClaudeProvider(model=settings.claude_model, timeout_s=settings.claude_timeout_s, prompts=prompts)
+        return ClaudeProvider(model=settings.claude_model, timeout_s=settings.claude_timeout_s, prompts=prompts,
+                              debug=settings.debug_provider)
     if settings.provider is ProviderName.GEMINI:
-        return GeminiProvider(model=settings.gemini_model, timeout_s=settings.gemini_timeout_s, prompts=prompts)
+        return GeminiProvider(model=settings.gemini_model, timeout_s=settings.gemini_timeout_s, prompts=prompts,
+                              debug=settings.debug_provider)
     if settings.provider is ProviderName.LOCAL_VLM:
         return LocalVlmProvider(base_url=settings.local_vlm_url, model=settings.local_vlm_model,
                                 timeout_s=settings.local_vlm_timeout_s, prompts=prompts)

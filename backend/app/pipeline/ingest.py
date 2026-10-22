@@ -9,6 +9,7 @@ Images get their EXIF orientation applied. A page over
 """
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -136,6 +137,21 @@ def detect_file_kind(head: bytes) -> FileKind | None:
     if head.startswith(_WEBP_RIFF) and head[_WEBP_TAG_OFFSET:_WEBP_TAG_OFFSET + len(_WEBP_TAG)] == _WEBP_TAG:
         return FileKind.WEBP
     return None
+
+
+def count_pages(data: bytes, kind: FileKind) -> int:
+    """Pages (PDF) or frames (images) in an uploaded file, without rendering or decoding them.
+    ``CorruptFileError`` if the file cannot be opened."""
+    try:
+        if kind is FileKind.PDF:
+            with pymupdf.open(stream=data, filetype="pdf") as doc:
+                return doc.page_count
+        with Image.open(io.BytesIO(data)) as img:
+            return getattr(img, "n_frames", 1)
+    except Image.DecompressionBombError as exc:
+        raise FileTooLargeError("image exceeds the pixel limit") from exc
+    except (RuntimeError, ValueError, UnidentifiedImageError, OSError, SyntaxError) as exc:
+        raise CorruptFileError("file cannot be opened to count its pages") from exc
 
 
 def load_file(path: Path, limits: IngestLimits) -> list[PageImage]:

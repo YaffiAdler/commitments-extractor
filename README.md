@@ -1,3 +1,26 @@
+אתה מהנדס תוכנה בכיר שבונה את "commitments-extractor": מנוע שקורא
+טפסי התחייבות של המעבדה המרכזית לנגיפים (מודפסים, סרוקים, מצולמים,
+כתובים ביד), מחלץ שדות, מסמן מה שאינו בטוח בו, ומייצא לאקסל.
+שדות: שם פרטי, שם משפחה, ת.ז., מספר מרכזי (כמה אפשריים, שומרים
+את כולם), תאריך קבלת הדגימה, גורם שולח (רשימה סגורה), מספר
+התחייבות ("דרישה" ובלאומית "דגימה"; כמה אפשריים, שומרים את כולם).
+מיקומים: מספר מרכזי על מדבקה עם המילה "מרכזי" או בכתב יד; תאריך
+קבלה בחותמת "התקבל" או בכתב יד מתחת למספר המרכזי.
+עקרונות: (1) שדה שלא נמצא נשאר ריק ומסומן, לעולם לא מנוחש;
+(2) ביטחון נגזר מכמה אותות ולא מהצהרת המודל; (3) פרטיות: אין ערכי
+שדות בלוגים, מחיקת קבצים זמניים, שליחה מינימלית לשירותים חיצוניים,
+הספק מאחורי ממשק ExtractionProvider; (4) כשל ספרת ביקורת בת.ז. הוא
+אות רך בלבד (פרטי הדוגמה שונו); (5) אין לוגיקה קשיחה לכל קופה בקוד,
+הגדרות בקובצי YAML.
+טכנולוגיה: Python 3.11, FastAPI, Pydantic, PyMuPDF, OpenCV,
+Tesseract (heb+eng), rapidfuzz, openpyxl, pytest; React+Vite+TS.
+מבנה: backend/app/{pipeline,providers,export,storage}, backend/form_types/,
+backend/data/senders.json, frontend/, eval/, samples/.
+כללי עבודה: קרא את הקוד הקיים לפני שאתה כותב. אל תשנה ממשקים של
+שלבים קודמים בלי לדווח. אם משהו לא ברור, כתוב הנחה מפורשת והוסף
+אותה ל-README. אל תציג דיוק שלא נמדד. בסוף: מה נבנה, איך בדקת, מה
+לא עובד.
+
 # commitments-extractor
 
 An engine that reads commitment forms received by the Central Virology Laboratory, extracts their fields, flags anything uncertain and exports to Excel.
@@ -26,7 +49,15 @@ backend/form_types/*.yaml     one definition per observed form type (25 types) +
 backend/data/senders.json     closed list of senders
 backend/data/migrations/      job store schema as numbered migrations (SQLite and Postgres)
 backend/tests/                pytest
-frontend/                     React + Vite + TypeScript
+frontend/                     React + Vite + TypeScript, the review screen:
+frontend/src/api.ts           types mirroring schemas.py + every API call
+frontend/src/review.ts        pure review logic: cells, fields to review, Tab order, form flags, dates
+frontend/src/messages.ts      Hebrew texts for failed requests
+frontend/src/components/      UploadPanel (react-dropzone, SSE progress), ReviewTable (TanStack Table),
+                              FieldPanel (crop, page with the box, reasons, raw value, editing), ExportButton
+frontend/src/**/*.test.ts(x)  Vitest + Testing Library (jsdom)
+frontend/e2e/                 Playwright: upload -> correct an orange field -> download (fake provider)
+docs/screenshots/             screenshots of the review screen, written by the e2e test (dummy data)
 eval/                         ground_truth.csv, run_eval.py -> report.md
 docs/form_mapping.md          form type mapping table
 docs/edge_cases.md            edge cases actually observed
@@ -66,7 +97,13 @@ CE_PROVIDER=gemini GEMINI_API_KEY=... ../.venv/Scripts/uvicorn app.main:app --re
 
 # frontend — proxies /api to the backend
 cd frontend && npm ci && npm run dev                                  # http://localhost:5173
-# deployed frontend: VITE_API_URL=<backend URL> at build time (see frontend/.env.example)
+cd frontend && npm test                                               # Vitest (table, editing, review logic)
+cd frontend && npx playwright install chromium && npm run e2e         # starts a fake-provider backend (:8765) and Vite (:5175)
+cd frontend && PLAYWRIGHT_CHANNEL=chrome npm run e2e                  # with the installed Chrome instead (no download)
+cd frontend && PLAYWRIGHT_CHANNEL=chrome npm run e2e:demo             # demo set-up: built frontend (:5176) -> backend (:8766) with access code + CORS
+# deployed frontend: VITE_API_URL=<backend URL> at build time (see frontend/.env.example); `npm run build` fails without it
+cd frontend && VITE_API_URL=http://localhost:8000 npm run build
+# deploying the demo (Render + Vercel): docs/DEPLOY.md
 
 # both in Docker (jobs in memory: CE_STORAGE=memory in docker-compose.yml)
 docker compose up --build
@@ -77,22 +114,29 @@ docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up --build
 .venv/Scripts/python eval/run_eval.py predictions.csv                 # writes eval/report.md
 ```
 
-### Trying it (Phase 1)
+### Trying it (Phase 8)
 1. Start the backend (e.g. with `CE_PROVIDER=fake`) and the frontend.
-2. Open http://localhost:5173, click "העלאת קובץ (PDF או תמונה)" and pick a file.
-3. When the status shows "הסתיים", a row appears in the table; click "ייצוא לאקסל".
-Fields that need review are highlighted (in the table and in the Excel file).
+2. Open http://localhost:5173, drop one or more PDFs / images on the dashed area (or click it), then "התחלת עיבוד".
+3. Rows appear as forms are read. Orange = to review; click a value (or Tab to it and press Enter) to open the side panel.
+4. In the panel type the right value (or keep it) and press Enter: the field turns green ("תוקן ידנית") and the next orange field opens. Tab / Shift+Tab move between orange fields, Esc closes.
+5. "ייצוא לאקסל": with fields still orange, a warning asks whether to export anyway.
 
 ### API
 | Method | Path | |
 |---|---|---|
-| POST | `/jobs` | multipart `file` (PDF, PNG, JPEG, TIFF or WEBP — detected from the content, up to `CE_MAX_UPLOAD_MB`); returns the job, processing runs in the background |
+| POST | `/jobs` | multipart `files`, repeated once per file (1 to `CE_MAX_FILES`; PDF, PNG, JPEG, TIFF or WEBP — detected from the content, each up to `CE_MAX_UPLOAD_MB`); one job over all of them, read in the order sent. 413 too large / too many files, 415 unsupported type (nothing is stored if any file is refused); returns the job, processing runs in the background |
+| GET | `/senders` | the canonical sender names (sorted), for the reviewer's sender field |
 | GET | `/jobs/{id}` | job status and extracted groups (while running: all groups found so far, `finished` marks the read ones) |
 | GET | `/jobs/{id}/events` | `text/event-stream`: `progress` (`status`, `forms_total`, `forms_done`), `rows` (newly finished groups, each once), `end` (the whole job, then the stream closes), `missing` (job gone); 404 if unknown |
 | POST | `/jobs/{id}/export` | the xlsx file (409 if the job is not `done`) |
-| PATCH | `/jobs/{id}/groups/{group}/fields/{field}` | JSON `{"value": "...", "item": n}`: a reviewer's value (`source=manual`, no review flag); `item` only for `central_numbers` / `commitment_numbers` (an index, or the list length to add one); dates as `YYYY-MM-DD`; the sender must be a canonical name. 409 if the job is not `done`, 422 for an invalid value; returns the job |
-| GET | `/jobs/{id}/groups/{group}/fields/{field}/crop` | PNG of the field's box (`?item=n` for list fields). 404 with `detail`: `image_gone` (the page image was deleted: file TTL or server restart), `no_box`, `field_not_found` |
-| DELETE | `/jobs/{id}` | deletes the job's rows in every table and its files |
+| PATCH | `/jobs/{id}/commitments/{cid}/fields/{field}` | `cid` = the form's id (`FormGroup.id`). JSON `{"value": "...", "item": n}`: a reviewer's value (`source=manual`, `needs_review=false`, `raw_value` keeps the text as read); `item` only for `central_numbers` / `commitment_numbers` (an index, or the list length to add one); dates as `YYYY-MM-DD`; the sender must be a canonical name. 409 if the job is not `done`, 422 for an invalid value; returns the job |
+| GET | `/jobs/{id}/crop/{cid}/{field}` | PNG of the field's box (`?item=n` for list fields), cut on request, never written to disk. 404 with `detail`: `image_gone` (the page image was deleted: file TTL or server restart), `no_box`, `field_not_found` |
+| GET | `/jobs/{id}/pages/{cid}/{page}` | JPEG of one page of the form (`page` 0-based in the source file, one of `FormGroup.pages`), at the resolution of `Field.bbox`. 404 `page_not_in_form` / `image_gone` |
+| DELETE | `/jobs/{id}` | deletes the job's rows in every table and its files (upload, page images, export) |
+
+Every endpoint under `/jobs/{id}` is 404 `job not found` for an unknown, deleted or expired job, and those with `{cid}` are 404 `commitment not found` for an unknown form.
+
+With `CE_DEMO_ACCESS_TOKEN` set, every endpoint but `/health` answers 401 `access token missing or invalid` without the code (see 109). Any endpoint may answer 429 `rate limit exceeded` (with `Retry-After`), and a request with a body 411 without `Content-Length` or 413 `request too large`. `POST /jobs` also gives 413 `too many pages` (a file over `CE_MAX_PAGES` or an upload over `CE_MAX_JOB_PAGES`).
 
 ### Settings (env vars)
 | Variable | Default | |
@@ -101,6 +145,7 @@ Fields that need review are highlighted (in the table and in the Excel file).
 | `ANTHROPIC_API_KEY` | — | required for `claude` |
 | `CE_CLAUDE_MODEL` | `claude-opus-5-5` | |
 | `CE_CLAUDE_TIMEOUT_S` | `60` | per API call |
+| `CE_DEBUG_PROVIDER` | `0` | `1`: log the shape of every Claude/Gemini request and answer (sizes, image dimensions and real media type, attempt, HTTP status, API error type/status and quota ids, request/response id, stop/finish reason, block/part kinds, token counts, exception chain); never values, text or the key. `scripts/check_provider.py` and `scripts/diagnose_extract.py` turn it on |
 | `GEMINI_API_KEY` | — | required for `gemini` |
 | `CE_GEMINI_MODEL` | `gemini-3.8-flash` | |
 | `CE_GEMINI_TIMEOUT_S` | `180` | per API call (thinking models are slow on full pages) |
@@ -121,11 +166,20 @@ Fields that need review are highlighted (in the table and in the Excel file).
 | `CE_DB_TIMEOUT_S` | `10` | Postgres: seconds to wait for a connection |
 | `CE_JOB_TTL_S` | `3600` | jobs (database rows) are deleted this long after creation, with their files |
 | `CE_FILE_TTL_S` | `3600` | temporary files (upload, page images, export) are deleted this long after the job directory was last written, even if the job stays |
-| `CE_MAX_UPLOAD_MB` | `50` | |
+| `CE_MAX_UPLOAD_MB` | `50` | per file |
+| `CE_MAX_FILES` | `20` | files in one upload (`POST /jobs`) |
 | `CE_MAX_IMAGE_PIXELS` | `50000000` | per page image (width × height), checked before decoding / rendering; also set as Pillow's `Image.MAX_IMAGE_PIXELS` |
 | `CE_MAX_CONCURRENT_JOBS` | `2` | jobs processed at once; further uploads wait as `pending` |
 | `CE_LOG_LEVEL` | `INFO` | level of the app's logs on stdout (`DEBUG` … `CRITICAL`) |
-| `CE_ALLOWED_ORIGINS` | — | browser origins allowed to call the API (CORS), comma-separated, e.g. the Vercel URL; empty = no CORS headers |
+| `CE_ALLOWED_ORIGINS` | — | browser origins allowed to call the API (CORS), comma-separated, each exactly `https://host[:port]` (no path, no trailing slash; `*` refused at startup), e.g. the Vercel URL; empty = no CORS headers |
+| `CE_DEMO_ACCESS_TOKEN` | — | shared demo access code (at least 16 characters): every endpoint but `/health` needs `Authorization: Bearer <code>` (GET also `?access_token=`, for EventSource); empty = no check. A secret: never logged, not in `Settings`' repr |
+| `CE_REQUIRE_ACCESS_TOKEN` | `0` | `1`: refuse to start without `CE_DEMO_ACCESS_TOKEN` (set in `render.yaml`) |
+| `CE_RATE_LIMIT_PER_MINUTE` | `300` | requests per client IP per minute (`/health` excluded); `0` = off |
+| `CE_UPLOAD_LIMIT_PER_HOUR` | `30` | `POST /jobs` per client IP per hour; `0` = off |
+| `CE_TRUSTED_PROXY_HOPS` | `0` | proxies in front that append to `X-Forwarded-For`; the client IP is the n-th entry from the right (0 = the socket peer) |
+| `CE_MAX_JOB_PAGES` | `200` | pages over all files of one upload, counted before the job is created |
+| `CE_PURGE_INTERVAL_S` | `300` | seconds between purges of expired jobs and files while the server runs |
+| `CE_CLEAR_TMP_ON_RESTART` | `1` | delete every job directory under `CE_TMP_DIR` at startup and shutdown |
 | `PORT` | `8000` | Docker image only: port uvicorn listens on (set by Render; no `CE_` prefix) |
 | `CE_TMP_DIR` | system temp `/commitments-extractor` | |
 | `CE_RENDER_DPI` | `250` | for PDF pages that are not a single full-page scan |
@@ -343,12 +397,48 @@ Fields that need review are highlighted (in the table and in the Excel file).
 - Schema: `Field.explanations`; `Field.revalidated(**update)` (moved from `normalize._rebuilt`); the `Field` validator leaves an empty field unflagged only when its reasons hold `optional_missing`; `NOT_FOUND` and `OPTIONAL_MISSING` constants (`normalize.NOT_FOUND` is now imported from `schemas`); `COMMITMENT_FIELDS`; `Commitment.optional_fields` and `Commitment.field_needs_review(name)` (used by `needs_review`, the Excel export and — mirrored — the UI); `FieldSpec.optional` (YAML key, default false). Stored inside `commitments.data_json`, so SQLite needs no schema change.
 - `tests/test_schemas.py` allows the optional `optional` key in the YAML files. Frontend: `Commitment.optional_fields` in `api.ts`.
 
+## Assumptions (Phase 8 — review API and review screen)
+99. **Paths of the review endpoints follow the task:** `PATCH /jobs/{id}/commitments/{cid}/fields/{field}` and `GET /jobs/{id}/crop/{cid}/{field}`, where `cid` is the form's id (`FormGroup.id`): a form holds exactly one commitment, so no separate commitment id was added. The old `/groups/...` paths are removed rather than kept as aliases (one path per resource; only our frontend used them). **A corrected field keeps `raw_value`** — the text as read from the form, `None` for an added list item or a field that was not found — instead of taking the reviewer's text (supersedes that part of 93): `value` is the reviewer's, `raw_value` the reading, and `Job.corrections` still records the previous raw value and source.
+100. **Several files per upload, one job:** `POST /jobs` takes the multipart field `files` once per file (up to `CE_MAX_FILES`, default 20; each file up to `CE_MAX_UPLOAD_MB`). All files are checked (size, type from the content) before any is written, so a refused upload leaves nothing on disk. The files are read one after the other, in the order sent; rows are sorted by file, then page. In the table each row then says "קובץ n, pages" (n = upload order); the original file names are still not kept (88).
+101. **Full page for the reviewer:** `GET /jobs/{id}/pages/{cid}/{page}` returns the stored page JPEG as is (full resolution, the coordinate system of `Field.bbox`, `Cache-Control: no-store`), only for pages of that form (`page_not_in_form` otherwise). The browser scales the image and draws the box over it in percent of the natural size, so no second resolution is stored. Like the crop, nothing is written outside the job's temporary directory.
+102. **`GET /senders`** returns the canonical sender names, so the sender field can offer the closed list (`<datalist>`); the backend still validates (422).
+103. **Upload screen:** react-dropzone (drag or click, several files, PDF / PNG / JPEG / TIFF / WEBP by MIME type and extension; refused files are listed by name), a removable list of the chosen files, then one upload. Progress comes from the SSE stream (polling as before when it fails): "ממתין בתור…" while `pending`, an indeterminate bar until segmentation has counted the forms, then "נקראו n מתוך m טפסים". Rows fill in as forms finish. Starting a new upload deletes the previous job from the server (one job on screen at a time), and "מחיקת העבודה מהשרת" deletes it on request.
+104. **Review table and side panel** (TanStack Table v9, `useTable` with no extra features: the "only uncertain" filter is applied to the data, since nothing else needs table state). One row per commitment; a cell is orange when any of its values needs review (`Commitment.field_needs_review`; an empty required list is one orange "—" whose correction adds item 0); every value is a button. Clicking it (or Enter / Space on it) opens the panel with: the status, the value as read (`raw_value`), the reasons (`Field.explanations`, or the codes if empty), the crop and the whole page with the box outlined. **Keys in the edit box:** Enter confirms — it sends the text as it is, so an unchanged value is confirmed too — and then opens the next orange field in reading order (row by row, column by column, wrapping around); Tab / Shift+Tab move to the next / previous orange field *without* saving; Esc closes the panel and returns focus to the cell. In the table the arrow keys move between cells (in RTL, ← is the next column). Editing is possible only on a `done` job. Dates are typed as DD/MM/YYYY (also `.` or `-`, or YYYY-MM-DD) and sent as YYYY-MM-DD; a two-digit year is refused, never completed (the century is not guessed).
+105. **"N לבדיקה"** counts values, not rows: each orange list item counts once, an empty required list once. Forms with a form-level flag (`split_uncertain`, `form_type_unknown`, `extraction_failed`, `central_duplicate`) get a red label in the "דגלי טופס" column (full text on hover) and are counted separately ("n טפסים עם דגל"). "הצג רק לא בטוחים" keeps the rows with `FormGroup.needs_review` (an orange field or a form flag). A form flag cannot be cleared from the screen (the API has no such operation).
+106. **Export never blocks.** With orange values or flagged forms left, "ייצוא לאקסל" first shows a dialog with both counts and the note that they stay orange in the file, with the reasons in the notes column; "ייצוא בכל זאת" exports, "חזרה לבדיקה" (or Esc) returns. With nothing left the file downloads at once.
+107. **Colours:** the UI now uses the Excel orange (`F4B183`) for cells to review (supersedes "the UI keeps its yellow" in 87); a manually confirmed value is light green. Numbers, IDs and dates are shown in a `dir="ltr"` span inside the right-to-left cell, as is the raw value in the panel.
+108. **The Hebrew texts of the form flags are copied** from `reason_texts.FORM_REASON_TEXTS` into `frontend/src/review.ts` (there is no endpoint for them); field reasons come from the backend (`explanations`). Change both places together.
+
+### Phase 8 — what was checked
+- Backend (`tests/test_main.py`, fake provider, every job store that is configured): several files → one job with the files in order; one refused file refuses the upload and writes nothing; too many files 413; no files 422; **every** endpoint under `/jobs/{id}` is 404 `job not found` for an unknown job, and every `{cid}` endpoint 404 `commitment not found`; PATCH sets `source=manual`, `needs_review=false`, confidence 1 and keeps `raw_value`, and logs neither the new nor the old value; the page endpoint returns the stored JPEG at full size, 404 `page_not_in_form` / `image_gone`; **a failed form** (provider raises on the first of two files): the job is `done`, the failed form has `error` + `extraction_failed`, the other is read, the SSE stream sends both rows and ends, the failed form can be corrected and the job exported, and the exception message (with a dummy value) is not in the logs; **DELETE** removes the upload, the page images and the export from disk and the rows from the store, after which the job, its events and its pages are 404, a second DELETE is 404, and another job is untouched. `test_corrections.py` checks the kept raw value. Full suite: 789 passed, 77 skipped (Postgres without `TEST_DATABASE_URL`, and real-Tesseract tests).
+- Frontend, Vitest (37 tests): review logic (cells, empty lists, Tab order forward / backward / wrap / after a confirmed field, form flags, sorting, dates incl. a refused two-digit year); the table (orange cells and values, counter, `dir="ltr"`, the toggle, form flags, click / Enter / arrow keys); the panel (raw value, reasons, crop and page, the box position in percent, Enter saves, an unchanged value is confirmed, date conversion and refusal, Tab / Shift+Tab / Esc, a 422 in Hebrew, missing image and missing box, read-only while running); the app (upload → rows → counter; a confirmed field turns green, the counter drops and the next orange field opens; the export warning with "חזרה לבדיקה" and "ייצוא בכל זאת"; no warning when nothing is left; a failed upload in Hebrew).
+- Playwright (Chrome, real backend with `CE_PROVIDER=fake`, memory store): upload a dummy page → 6 to review → correct the ID with Enter → the cell is not orange, "5 לבדיקה", the next field opened, the raw value is still the reading → export warning → "ייצוא בכל זאת" → `commitments.xlsx` downloaded and not empty. A second test uploads two files → two rows, "קובץ 2, 1", "12 לבדיקה". It writes `docs/screenshots/review_table.png`, `side_panel.png` and `export_warning.png`.
+- `npm run build`, `npm run lint` (oxlint) and `tsc -b` pass.
+
+### Phase 8 — what does not work / was not checked
+- **The box on the page and the crop were not seen in a real browser:** the fake provider reads no boxes, so the e2e panel shows "no box" and the page without a highlight. The box drawing is checked only in Vitest (positions in percent), and the crop endpoint only in pytest.
+- Playwright ran with the installed Chrome (`PLAYWRIGHT_CHANNEL=chrome`): downloading Playwright's own Chromium failed on this machine (network / certificate). Firefox and Safari were not run; no screen reader was tried; the layout was not checked on a narrow screen.
+- The content of the downloaded xlsx is not read in the e2e test (only name and size); the content is covered by `test_xlsx.py` / `test_e2e.py`.
+- Inside the edit box Tab does not reach the panel's other controls (it jumps between orange fields, as asked); the close button is reachable with Esc or the mouse.
+- A value cannot be cleared, and a form flag cannot be cleared (no API). A correction does not re-run normalization or the cross-form `central_duplicate` check (as in 93).
+- Postgres: the API tests were not run against Postgres here (no `TEST_DATABASE_URL`).
+- The table is not virtualized; a job with hundreds of forms was not tried.
+
+### Phase 8 changes to existing interfaces
+- `POST /jobs`: the multipart field is `files` (repeated), was `file`. A client sending `file` now gets 422.
+- `PATCH /jobs/{id}/groups/{group}/fields/{field}` → `PATCH /jobs/{id}/commitments/{cid}/fields/{field}`; `GET /jobs/{id}/groups/{group}/fields/{field}/crop` → `GET /jobs/{id}/crop/{cid}/{field}`. The old paths are gone; an unknown form is 404 `commitment not found` (was `form not found`).
+- A corrected field's `raw_value` is the reading (was the reviewer's text).
+- New: `GET /jobs/{id}/pages/{cid}/{page}`, `GET /senders`, `Settings.max_files` (`CE_MAX_FILES`), `PageImageStore.load_jpeg`, `field_crops.form_page_jpeg` and `PAGE_NOT_IN_FORM`.
+- `JobRunner.submit(job, stored)` / `run(job, stored)` take a list of paths (was one path).
+- Frontend `api.ts`: `uploadFile(file)` → `uploadFiles(files)`; `getCrop` uses the new path and returns `ImageResult` (`missing` with the `detail`, replacing `gone`); new `getPage`, `correctField`, `getSenders`, `ApiError` (failed requests carry status and `detail`); `Field` now has `raw_value`, `confidence`, `reasons`, `explanations`, `source`; `SPLIT_UNCERTAIN` moved to `review.ts`. The single-file `App.tsx` is split into components.
+- `frontend/package.json`: new `@tanstack/react-table`, `react-dropzone`; dev `vitest`, `jsdom`, `@testing-library/*`, `@playwright/test`; scripts `test`, `e2e`. `.gitignore`: Playwright's `test-results/` and `playwright-report/`.
+
 ## Assumptions (Phase 9 — Excel export)
 84. **No template from the laboratory**, so the format is our choice. One sheet "התחייבויות", one row per form (as before), columns by default: שם פרטי | שם משפחה | ת.ז. | מספר מרכזי | תאריך קבלה | גורם שולח | מספר התחייבות | הערות לבדיקה | קובץ מקור. The selection and order come from `CE_EXPORT_COLUMNS` (`config.ExportSettings`, keys in `EXPORT_COLUMN_KEYS`); `Settings` refuses an unknown or repeated key. The Hebrew headers are fixed in `export/xlsx.py` (`HEADERS`). An optional `pages` column ("עמודים", 1-based) is available but not in the default list, because the task's list does not have it. The sheet "עמודים לא רלוונטיים" stays (headers "קובץ מקור", "עמוד").
 85. **Sheet layout:** right-to-left, header row bold and frozen (`freeze_panes="A2"`), column width = longest line in the column + 2 characters, between 8 and 60. openpyxl cannot measure rendered text, so this is a character count. The notes cell wraps, aligned to the top.
 86. **Cell types.** ID, central numbers, commitment numbers, names and sender are text cells with `number_format="@"` (leading zeros kept); the received date is a real date cell with `number_format="DD/MM/YYYY"`. Both formats are also set on **empty** cells, so a value the reviewer types in keeps its leading zeros / is read as a date. Several numbers: `CE_EXPORT_MULTI_VALUES=joined` (default) → one cell, `; `-separated; `columns` → "מספר מרכזי 1", "מספר מרכזי 2", …, as many columns as the longest list in the job (at least one).
 87. **Uncertain fields:** a field with `needs_review` (the same rule as the UI: `Commitment.field_needs_review`) gets an orange background (`F4B183`, instead of the light yellow `FFF2CC` used until now; the UI keeps its yellow). In `columns` mode each number is coloured on its own; an empty list that must not be empty is coloured in its first column only. The value is never changed and an empty field stays empty — it is coloured, not filled. **"הערות לבדיקה"** sums up why, one line per cause: first form-level causes (`split_uncertain`, `form_type_unknown`, `extraction_failed`, `central_duplicate`; Hebrew texts in the new `reason_texts.FORM_REASON_TEXTS`), then each flagged field as "<header>: <reason>; <reason>" — `Field.explanations` (Phase 7), or the codes turned into text if those are empty, or "סומן לבדיקה" if a field is flagged with no reason at all. A flagged list item is numbered ("מספר מרכזי 2: …") when the list has more than one item. All reasons of a flagged field are listed, including confirming ones (e.g. OCR agreed), so the reviewer sees the whole picture; the texts describe checks, never values. This replaces the columns "פיצול" and "לבדיקה" ("כן"): a row needs review exactly when its notes cell is not empty.
-88. **"קובץ מקור" is the stored file name** (`FormGroup.source_file`, a generated name such as `3f2a….pdf`), not the name the user uploaded: the original name is not kept (it may contain a patient name, see Privacy). With one file per job, which is how the UI uploads, every row has the same value.
+88. *("One file per job" is superseded by 100.)* **"קובץ מקור" is the stored file name** (`FormGroup.source_file`, a generated name such as `3f2a….pdf`), not the name the user uploaded: the original name is not kept (it may contain a patient name, see Privacy). With one file per job, which is how the UI uploads, every row has the same value.
 89. **`docs/sample_output.xlsx`** is written by `scripts/make_sample_output.py` from `FakeProvider` dummy readings only (three blank PDF pages run through the real `Orchestrator`, without OCR): a complete row, a row with two central and two commitment numbers and a handwritten short-year date, and a row with no ID and an illegible commitment number. `.gitignore` ignores `*.xlsx` except this file.
 
 ### Phase 9 — what was checked
@@ -359,7 +449,7 @@ Fields that need review are highlighted (in the table and in the Excel file).
 - **Not opened in Excel or LibreOffice** here — only read back with openpyxl. Column widths, RTL and wrapping are checked as stored settings, not as they look.
 - The notes can be long: a handwritten field read once already has two reasons, so a typical row has 5–7 lines. Nothing is shortened.
 - The original upload name is not shown (88). There is no per-field confidence column and no column with the reason codes.
-- The UI still highlights in light yellow and does not show the explanations.
+- *(Fixed in Phase 8: the UI uses the same orange and shows the explanations in the side panel.)* The UI still highlights in light yellow and does not show the explanations.
 
 ### Phase 9 changes to existing interfaces
 - `write_xlsx(job, out_path, settings: ExportSettings | None = None)` — new optional argument (None = `ExportSettings()` from env); the API passes `settings.export`.
@@ -370,8 +460,8 @@ Fields that need review are highlighted (in the table and in the Excel file).
 ## Assumptions (deployment fixes — sync report)
 71. *(Default superseded by 90.)* **Jobs are kept in memory by default** (`CE_STORAGE=memory`), because the deployment guidelines allow no persistent state on disk and Render's disk is ephemeral anyway. `sqlite` stays for local use only; `docker-compose.yml` no longer mounts the `job-db` volume, and `docker-compose.sqlite.yml` adds it back on request. Supersedes 24.
 72. **The container listens on `0.0.0.0:${PORT:-8000}`** (`backend/Dockerfile`), so Render can assign the port. `PORT` is the only variable read without the `CE_` prefix; the `CE_` prefix on all other settings is deliberate (`CE_TMP_DIR`, `CE_TESSERACT_CMD`, `CE_ALLOWED_ORIGINS`, ...).
-73. **CORS is off unless `CE_ALLOWED_ORIGINS` is set.** Then `CORSMiddleware` allows exactly those origins, methods `GET`/`POST`/`DELETE`, no credentials. An origin not in the list gets no CORS headers (the browser blocks it) and its preflight gets 400. Same-origin use (the Vite proxy, docker compose) needs nothing.
-74. **Frontend API base from `VITE_API_URL`** (build time, `frontend/.env.example`), default `/api` (the Vite dev proxy). On Vercel set it to the backend root URL (the backend has no `/api` prefix) and add the Vercel origin to the backend's `CE_ALLOWED_ORIGINS`. An empty value also falls back to `/api`; a trailing slash is dropped. `frontend/vercel.json` builds with Vite and rewrites every path to `index.html` (SPA fallback). `.gitignore` keeps `.env.*` ignored except `.env.example`.
+73. *(Allowed headers and origin validation extended by 111.)* **CORS is off unless `CE_ALLOWED_ORIGINS` is set.** Then `CORSMiddleware` allows exactly those origins, methods `GET`/`POST`/`DELETE`, no credentials. An origin not in the list gets no CORS headers (the browser blocks it) and its preflight gets 400. Same-origin use (the Vite proxy, docker compose) needs nothing.
+74. *(The `/api` fallback in a build is superseded by 113.)* **Frontend API base from `VITE_API_URL`** (build time, `frontend/.env.example`), default `/api` (the Vite dev proxy). On Vercel set it to the backend root URL (the backend has no `/api` prefix) and add the Vercel origin to the backend's `CE_ALLOWED_ORIGINS`. An empty value also falls back to `/api`; a trailing slash is dropped. `frontend/vercel.json` builds with Vite and rewrites every path to `index.html` (SPA fallback). `.gitignore` keeps `.env.*` ignored except `.env.example`.
 
 ### Deployment fixes changes to existing interfaces
 - `Settings.storage` default: `sqlite` → `memory`. `StorageName` members are unchanged.
@@ -383,7 +473,7 @@ Fields that need review are highlighted (in the table and in the Excel file).
 76. **A failed job logs its id and exception type only** (`job <id> failed: ValueError`), at ERROR, with no message and no traceback: a library message can quote field text (e.g. pydantic's `input_value`). The traceback is deliberately not in the logs; reproduce locally to debug. `Job.error` keeps the exception type as before.
 77. **At most `CE_MAX_CONCURRENT_JOBS` (2) jobs run at once** (`runner.JobRunner`, an `asyncio.Semaphore` on the server's event loop). Further uploads are accepted (201) and wait with status `pending` (the existing status; no new `queued` value) without holding a worker thread, and start as slots free up. The queue has no length limit other than the job TTL. A server restart fails waiting jobs like running ones (`fail_interrupted`, SQLite only).
 78. **Pixel cap per page** (`CE_MAX_IMAGE_PIXELS`, default 50 M ≈ A3 at 400 DPI, ~150 MB per RGB copy). Ingest checks width × height before decoding an image, before rendering a PDF page (page size × `CE_RENDER_DPI`) and before decoding an embedded full-page scan, and raises `FileTooLargeError` (the job fails with that type). The same value is set as Pillow's `Image.MAX_IMAGE_PIXELS` at startup (process-wide), so Pillow itself refuses an image over twice the cap when opening it.
-79. **Progress through server-sent events.** `GET /jobs/{id}/events` polls the job store every 0.5 s and sends only changes (see the API table); a `:` comment every 15 s keeps idle connections open, and `X-Accel-Buffering: no` asks proxies not to buffer. To have something to send, the orchestrator now adds a file's groups to the job right after segmentation, sets `FormGroup.finished` when a form's reading ends (also on error) and the runner saves the job after each step. Rows are sent before the cross-form `central_duplicate` check, so the final `end` event (the whole job) is the authoritative state. The API has no authentication, so there is no access token to accept in the query string.
+79. **Progress through server-sent events.** `GET /jobs/{id}/events` polls the job store every 0.5 s and sends only changes (see the API table); a `:` comment every 15 s keeps idle connections open, and `X-Accel-Buffering: no` asks proxies not to buffer. To have something to send, the orchestrator now adds a file's groups to the job right after segmentation, sets `FormGroup.finished` when a form's reading ends (also on error) and the runner saves the job after each step. Rows are sent before the cross-form `central_duplicate` check, so the final `end` event (the whole job) is the authoritative state. *(The last sentence is superseded by 109.)* The API has no authentication, so there is no access token to accept in the query string.
 80. **Frontend: EventSource first, polling as the fallback.** The UI follows `/events`; if `EventSource` is missing, the job disappears or the stream breaks before `end`, it closes the stream (no browser auto-reconnect) and polls `GET /jobs/{id}` every second as before. Only `finished` rows are shown, in page order, with "n/m טפסים" while the job runs.
 81. **Pinned dependencies.** `backend/requirements.lock` pins the whole backend dependency closure (runtime + dev) to the versions the tests ran with. `scripts/lock_requirements.py` writes it from the venv, with environment markers evaluated for the Docker image (Linux, CPython 3.11). It is a pip constraints file: the Docker image runs `pip install -c requirements.lock .` (runtime only), development `pip install -c backend/requirements.lock -e "backend[dev]"`. `pyproject.toml` keeps its `>=` ranges as the compatibility statement. The frontend pins exact versions in `package.json` and installs with `npm ci` (Dockerfile, README).
 82. **Ingest limits come from `Settings` only** (`IngestLimits.from_settings`); `IngestLimits` has no defaults of its own and `load_file` requires it.
@@ -402,7 +492,7 @@ Fields that need review are highlighted (in the table and in the Excel file).
 90. **Store selection:** `CE_STORAGE` when set (`memory` / `sqlite` / `postgres`); otherwise `postgres` if `DATABASE_URL` is set, else `sqlite`. This replaces the `memory` default of 71: without any setting, jobs now go to `backend/data/app.db`. `docker-compose.yml` still sets `memory`; on Render, `DATABASE_URL` makes it Postgres. **Deviation from the deployment guideline "no persistent state on disk"** — only for the local default without `DATABASE_URL`; the deployment keeps its state in Postgres, not on the container disk. `DATABASE_URL` is read without the `CE_` prefix (as Render names it) and left out of `Settings`' repr.
 91. **One schema, versioned migrations** (`backend/data/migrations`, see Storage). The full `FormGroup` stays one JSON column (`commitments.data_json`) rather than one row per field: it round-trips every field exactly, including signals and boxes, and new model fields need no migration. Only filter fields are columns.
 92. **Kept now that was dropped before:** the classification of each form (`FormGroup.classification`: form type, `known`, sender as read, match status, best score and up to 3 candidates; before, score and candidates were lost for a matched sender), the read time of each form (`FormGroup.read_ms`), the job's `started_at` / `finished_at`, and several files per job (`job_files`). The model's free-text `evidence` / page-pair `reason` are still not stored (they may quote the page).
-93. **Manual corrections** (`PATCH .../fields/{field}`, `app/corrections.py`): the value replaces `value` and `raw_value`, `source=manual`, confidence 1, `needs_review=false`, reasons `[manual_correction]` (text "הוזן ידנית על ידי בודק"); the box and earlier readings stay. Each correction is recorded in `Job.corrections` (`corrections` table) with the previous raw value and source. Only on a `done` job. Not re-run after a correction: normalization rules and the cross-form `central_duplicate` check (a form flagged so stays flagged). A value cannot be cleared through the API, and the UI has no editing yet.
+93. *(The `raw_value` part and the paths are superseded by 99; the UI part by 104.)* **Manual corrections** (`PATCH .../fields/{field}`, `app/corrections.py`): the value replaces `value` and `raw_value`, `source=manual`, confidence 1, `needs_review=false`, reasons `[manual_correction]` (text "הוזן ידנית על ידי בודק"); the box and earlier readings stay. Each correction is recorded in `Job.corrections` (`corrections` table) with the previous raw value and source. Only on a `done` job. Not re-run after a correction: normalization rules and the cross-form `central_duplicate` check (a form flagged so stays flagged). A value cannot be cleared through the API, and the UI has no editing yet.
 94. **Page images on disk, not in the database:** each preprocessed page is written as JPEG (quality 90, full resolution of `original`, the coordinates of `Field.bbox`) to `<CE_TMP_DIR>/<job>/pages/`. The crop is the box plus 10 px, cut on request as PNG with `Cache-Control: no-store`.
 95. **Separate file TTL** (`CE_FILE_TTL_S`, default 3600 like `CE_JOB_TTL_S`): a long database retention no longer keeps uploads and page images on disk as long.
 96. **Database errors are reported by type only** (`JobStoreError`, API 503); see Storage.
@@ -418,6 +508,31 @@ Fields that need review are highlighted (in the table and in the Excel file).
 - `classify.Classification.result()`. `Orchestrator(..., page_images=None)`; `crops.crop_bbox(image, bbox)`.
 - API: new `PATCH /jobs/{id}/groups/{group}/fields/{field}` and `GET .../fields/{field}/crop`; CORS methods include `PATCH`; a database failure is 503. `app.state.jobs` exposes the store (tests).
 - Frontend `api.ts`: `Field.bbox`, `BBox`, `IMAGE_GONE`, `getCrop()`; the table has a "תמונה" button per value with a box.
+
+## Assumptions (demo deployment — Vercel + Render)
+109. **One shared access code for the demo** (`CE_DEMO_ACCESS_TOKEN`), not user accounts. `access.AccessTokenMiddleware` checks every HTTP request except `/health` (Render's health check), in constant time: `Authorization: Bearer <code>`, or on GET only the query parameter `access_token` (EventSource cannot send headers). Writes must send the header. Without the variable there is no check (local use, tests); `CE_REQUIRE_ACCESS_TOKEN=1` (set in `render.yaml`) makes a missing code a startup error, so a forgotten secret fails closed. A code under 16 characters is refused. The names keep the `CE_` prefix (the task said `DEMO_ACCESS_TOKEN` / `ALLOWED_ORIGINS`; see 72).
+110. **The code is never logged.** Refusals log `request refused: no valid access token` with no path, IP or value. uvicorn's access log prints the path with its query, so `log_filters.RedactQueryTokenFilter` masks it there (`access_token=***`); `configure_logging` attaches it. Proxies in front (Render) may log full URLs themselves; that is outside the app.
+111. **CORS for the code header:** `Authorization` is the one allowed non-simple header; credentials (cookies) stay off. `Settings` refuses `*` and any origin with a path or trailing slash: the browser's `Origin` never has one, and the mismatch would only show as a blocked request. Middleware order: CORS (outermost, so 401 / 429 / 413 carry CORS headers and the frontend can read them) → body size → rate limit (before the code check, so guessing is limited too) → access code → endpoint.
+112. **Limits before any work:** `body_limit.BodySizeLimitMiddleware` refuses a body over `CE_MAX_FILES × CE_MAX_UPLOAD_MB` + 1 MB (413) or without `Content-Length` (411) before Starlette spools it to disk. `POST /jobs` counts pages without rendering (`ingest.count_pages`) and refuses a file over `CE_MAX_PAGES` or an upload over `CE_MAX_JOB_PAGES` (413 `too many pages`, nothing stored); a file that cannot be opened is still accepted and fails in ingest with its specific type, as before. `rate_limit` keeps fixed one-minute / one-hour windows per client IP in memory (per process, lost on restart). The client IP is the socket peer, or with `CE_TRUSTED_PROXY_HOPS=n` the n-th `X-Forwarded-For` entry from the right (the ones proxies appended; entries further left are client-controlled). `render.yaml` assumes one appending proxy (`1`); not verified on Render.
+113. **The frontend calls the backend directly** at `VITE_API_URL`, the event stream too; `vite build` fails without an absolute `http(s)` URL, so a Vercel build cannot silently call its own host. `npm run dev` keeps the `/api` proxy. `vercel.json` has only the SPA fallback (no API rewrites).
+114. **Access screen** (`components/AccessGate.tsx`): on load the frontend calls `GET /senders` with the stored code (or none): 200 → the app, 401 → the code screen, network error → a retry button (the first request to a sleeping Render instance can take about a minute; the screen says so). The code is kept in `sessionStorage` only (gone with the tab). A later 401 anywhere (`api.ts`) drops the code and shows the screen again. `components/DemoBanner.tsx` shows "הדגמה, יש להעלות רק טפסי דוגמה, לא נתוני אמת" on every screen, fixed at the bottom so it never covers the sticky table header or side panel.
+115. **Short-lived files:** at startup and at shutdown every job directory under `CE_TMP_DIR` is deleted (`TempStorage.clear`, only directories named like a job id), and a background task purges expired jobs and files every `CE_PURGE_INTERVAL_S`, not only on the next request. `render.yaml` sets `memory` storage and 30-minute TTLs. Deviation: with SQLite locally, a restart (also `--reload`) now deletes page images too, so crops of older jobs show `image_gone`; `CE_CLEAR_TMP_ON_RESTART=0` keeps them.
+116. **Container:** Tesseract with `heb`, `eng` and `osd` data; runs as a non-root user; still `0.0.0.0:${PORT:-8000}`. `render.yaml` (repo root) is a Blueprint: Docker, health check `/health`, free plan, no auto-deploy. The secrets and `CE_ALLOWED_ORIGINS` are `sync: false` (entered in the dashboard). The demo limits have values (`CE_MAX_PAGES=6`, `CE_MAX_FILES=3`, `CE_MAX_UPLOAD_MB=10`, one job at a time), based on estimates, not measurements (docs/DEPLOY.md).
+
+### Demo deployment — what was checked
+- Backend tests: the code check (header; query on GET only; 401 on every endpoint including SSE, crop and page images, with CORS headers on the refusal), CORS refusing a foreign origin (preflight 400, no `Access-Control-Allow-Origin` even with the right code), the rate limits, the body and page limits, the log masking, the start/stop cleanup and the new settings checks.
+- Frontend: Vitest for the Bearer header, the code in the EventSource query, 401 handling, the access screen and the banner. `npm run e2e:demo` (Playwright) builds the frontend with `VITE_API_URL` and serves it on another origin than the backend (code, CORS and rate limits on). It goes through a wrong code, the right code, an upload, the event stream and a reload.
+
+### Demo deployment — what was not checked
+- The deployment itself (Render, Vercel), the Docker image build (no Docker daemon on the development machine), and `render.yaml` against Render's schema.
+- How Render fills `X-Forwarded-For` (the rate limit's client IP), and memory use on a 512 MB instance.
+
+### Demo deployment changes to existing interfaces
+- `Settings`: new `demo_access_token` (not in repr), `require_access_token`, `rate_limit_per_minute`, `upload_limit_per_hour`, `trusted_proxy_hops`, `max_job_pages`, `purge_interval_s`, `clear_tmp_on_restart`; `allowed_origins` is validated. New `config.MIN_ACCESS_TOKEN_LENGTH`.
+- New modules `app/access.py`, `app/rate_limit.py`, `app/body_limit.py`, `app/log_filters.py`; `main.add_middleware(app, settings)`, `main.purge_periodically(jobs, interval_s)`.
+- `ingest.count_pages(data, kind)`; `TempStorage.clear()`.
+- API: 401 / 429 / 411 and 413 `too many pages` / `request too large` as above; CORS allows the `Authorization` header.
+- Frontend: `api.checkAccess(token)`, and every call sends the stored code; new `access.ts`, `AccessGate`, `DemoBanner`; `vite build` requires `VITE_API_URL`; new `npm run e2e:demo` (`playwright.demo.config.ts`, `e2e/demo.spec.ts`), which the default `npm run e2e` ignores.
 
 ## Storage
 - **Interface:** `app/storage/base.py` defines the `JobStore` Protocol (`init`, `close`, `create`, `get`, `update`, `delete`, `list_commitments`, `fail_interrupted`, `purge_expired`); `create_job_store(settings, tmp)` builds `PostgresJobStore` (`storage/postgres.py`), `SqliteJobStore` (`storage/sqlite.py`) or `MemoryJobStore` (`storage/memory.py`). Both SQL stores share all queries (`storage/sql.py`); they differ only in the connection (SQLite: one per operation; Postgres: a `psycopg_pool` pool) and the migration lock.

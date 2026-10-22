@@ -146,3 +146,38 @@ def test_classify_sends_one_page_with_the_type_list(api_key):
 
     result = _provider(handler).classify([_page()], form_types)
     assert (result.form_type, result.sender_raw) == ("maccabi_online", "מכבי שירותי בריאות")
+
+
+DIAGNOSTICS_LOGGER = "app.providers.claude"
+
+
+def test_debug_off_by_default_logs_nothing(api_key, caplog):
+    assert Settings().debug_provider is False
+    caplog.set_level("INFO", logger=DIAGNOSTICS_LOGGER)
+    _provider(_tool_response).extract_form([_page()], None)
+    assert not [r for r in caplog.records if r.name == DIAGNOSTICS_LOGGER]
+
+
+def test_debug_logs_request_and_answer_shape_without_values(api_key, caplog):
+    provider = ClaudeProvider("test-model", 1.0, debug=True,
+                              client=httpx.Client(transport=httpx.MockTransport(_tool_response)))
+    caplog.set_level("INFO", logger=DIAGNOSTICS_LOGGER)
+    provider.extract_form([_page(), _page()], None)
+    (line,) = [r.getMessage() for r in caplog.records if r.name == DIAGNOSTICS_LOGGER]
+    for expected in ("tool=record_form", "model=test-model", "max_tokens=4096", "images=2",
+                     "50x50 image/jpeg(actual image/jpeg)", "http=200", "blocks=['tool_use']", "outcome=ok"):
+        assert expected in line
+    for secret in ("dummy", "משה", "000000018", "111111"):
+        assert secret not in line
+
+
+def test_debug_logs_the_cause_of_a_timeout(api_key, caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("dummy", request=request)
+
+    provider = ClaudeProvider("test-model", 1.0, debug=True, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    caplog.set_level("INFO", logger=DIAGNOSTICS_LOGGER)
+    with pytest.raises(RetryableProviderError):
+        provider.extract_form([_page()], None)
+    (line,) = [r.getMessage() for r in caplog.records if r.name == DIAGNOSTICS_LOGGER]
+    assert "http=None" in line and "outcome=RetryableProviderError <- ReadTimeout" in line

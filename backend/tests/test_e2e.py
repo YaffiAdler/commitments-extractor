@@ -24,7 +24,7 @@ def test_upload_to_xlsx(tmp_path, monkeypatch):
     monkeypatch.setenv("CE_RENDER_DPI", "72")
     client = TestClient(create_app(Settings(), FakeProvider()))
 
-    created = client.post("/jobs", files={"file": ("form.pdf", _one_page_pdf(), "application/pdf")})
+    created = client.post("/jobs", files={"files": ("form.pdf", _one_page_pdf(), "application/pdf")})
     assert created.status_code == 201
     job_id = created.json()["id"]
 

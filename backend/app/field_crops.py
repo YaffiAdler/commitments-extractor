@@ -1,7 +1,8 @@
-"""The crop of one field's box from its stored page image, for the reviewer
-(``GET /jobs/{id}/groups/{group}/fields/{field}/crop``). The crop is made on
-request from the page image in the job's temporary directory; it is never
-written to disk or to the database."""
+"""Images of a form for the reviewer: the crop of one field's box
+(``GET /jobs/{id}/crop/{cid}/{field}``) and a whole page of the form
+(``GET /jobs/{id}/pages/{cid}/{page}``). Both come from the page images in the
+job's temporary directory; a crop is made on request and never written to disk
+or to the database."""
 from __future__ import annotations
 
 import cv2
@@ -20,6 +21,7 @@ class CropUnavailableError(LookupError):
 
 FIELD_NOT_FOUND = "field_not_found"
 NO_BOX = "no_box"
+PAGE_NOT_IN_FORM = "page_not_in_form"
 # The page image was deleted (file TTL, job deleted, or a server restart on an ephemeral disk).
 IMAGE_GONE = "image_gone"
 
@@ -41,3 +43,14 @@ def field_crop_png(images: PageImageStore, job_id: str, group: FormGroup, name: 
     if not ok:
         raise ValueError("crop could not be encoded")
     return encoded.tobytes()
+
+
+def form_page_jpeg(images: PageImageStore, job_id: str, group: FormGroup, page_no: int) -> bytes:
+    """The stored JPEG of page ``page_no`` (0-based in the source file), which
+    must be one of the form's pages. Full resolution: the coordinates of ``Field.bbox``."""
+    if page_no not in group.pages:
+        raise CropUnavailableError(PAGE_NOT_IN_FORM)
+    page = images.load_jpeg(job_id, group.source_file, page_no)
+    if page is None:
+        raise CropUnavailableError(IMAGE_GONE)
+    return page

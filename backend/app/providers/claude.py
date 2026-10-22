@@ -8,7 +8,10 @@ retrying is the caller's decision (``app/pipeline/calls.py``).
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
+import time
 from typing import Any
 
 import httpx
@@ -31,8 +34,11 @@ from app.providers.common import (
     number_from_output,
     page_relation_from_output,
 )
+from app.providers.diagnostics import exception_chain, inspect_base64_image
 from app.providers.prompts import Prompts
 from app.schemas import FormClassification, FormReading, FormType, NumberReading, PageRelation
+
+logger = logging.getLogger(__name__)
 
 API_URL = "https://api.anthropic.com/v1/messages"
 API_VERSION = "2023-06-01"
@@ -58,10 +64,11 @@ class ClaudeProvider:
     name = "claude"
 
     def __init__(self, model: str, timeout_s: float, client: httpx.Client | None = None,
-                 prompts: Prompts | None = None) -> None:
+                 prompts: Prompts | None = None, debug: bool = False) -> None:
         self._model = model
         self._client = client or httpx.Client(timeout=timeout_s)
         self._prompts = prompts or Prompts.load()
+        self._debug = debug
 
     def extract_form(self, pages: list[PageImage], form_type: FormType | None) -> FormReading:
         data = self._call_tool([p.image for p in pages], self._prompts.extract(form_type), "record_form",
@@ -98,12 +105,29 @@ class ClaudeProvider:
             "messages": [{"role": "user", "content": [*_image_blocks(images), {"type": "text", "text": instruction}]}],
         }
         headers = {"x-api-key": api_key, "anthropic-version": API_VERSION, "content-type": "application/json"}
+        started = time.perf_counter()
+        response: httpx.Response | None = None
         try:
-            response = self._client.post(API_URL, json=body, headers=headers)
+            response = self._post(body, headers)
+            tool_input = self._tool_input(response, tool_name)
+        except ProviderError as exc:
+            if self._debug:
+                self._log_call(body, tool_name, started, response, exc)
+            raise
+        if self._debug:
+            self._log_call(body, tool_name, started, response, None)
+        return tool_input
+
+    def _post(self, body: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
+        try:
+            return self._client.post(API_URL, json=body, headers=headers)
         except httpx.TimeoutException as exc:
             raise RetryableProviderError("Claude API timed out") from exc
         except httpx.HTTPError as exc:
             raise RetryableProviderError(f"Claude API request failed: {type(exc).__name__}") from exc
+
+    @staticmethod
+    def _tool_input(response: httpx.Response, tool_name: str) -> dict[str, Any]:
         if response.status_code in RETRYABLE_STATUSES:
             raise RetryableProviderError(f"Claude API returned HTTP {response.status_code}")
         if response.status_code != httpx.codes.OK:
@@ -115,3 +139,37 @@ class ClaudeProvider:
             if block.get("type") == "tool_use" and block.get("name") == tool_name:
                 return block["input"]
         raise ProviderError("Claude API response has no tool call")
+
+    def _log_call(self, body: dict[str, Any], tool_name: str, started: float,
+                  response: httpx.Response | None, error: BaseException | None) -> None:
+        """One line describing the request and the answer's shape (``CE_DEBUG_PROVIDER``)."""
+        elapsed_s = time.perf_counter() - started
+        content = body["messages"][0]["content"]
+        images = [inspect_base64_image(block["source"]["data"], block["source"]["media_type"])
+                  for block in content if block.get("type") == "image"]
+        request_bytes = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        status, request_id, error_type, stop_reason, block_types = _response_shape(response)
+        logger.info(
+            "claude call tool=%s model=%s max_tokens=%d request_bytes=%d images=%d [%s] elapsed_s=%.2f "
+            "http=%s request_id=%s error_type=%s stop_reason=%s blocks=%s outcome=%s",
+            tool_name, body["model"], body["max_tokens"], request_bytes, len(images),
+            "; ".join(info.describe() for info in images), elapsed_s, status, request_id, error_type,
+            stop_reason, block_types, exception_chain(error) if error else "ok",
+        )
+
+
+def _response_shape(response: httpx.Response | None) -> tuple[Any, ...]:
+    """HTTP status, request id, API error type, stop reason and content block
+    types of a response; never its text."""
+    if response is None:
+        return None, None, None, None, []
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    blocks = [block.get("type") for block in payload.get("content") or [] if isinstance(block, dict)]
+    return (response.status_code, response.headers.get("request-id"), error.get("type"),
+            payload.get("stop_reason"), blocks)

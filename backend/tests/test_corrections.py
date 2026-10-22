@@ -18,12 +18,12 @@ def _job() -> Job:
     return Job(groups=[group])
 
 
-def test_correction_replaces_value_and_keeps_box_and_readings():
+def test_correction_replaces_value_and_keeps_raw_value_box_and_readings():
     job = _job()
     group = apply_correction(job, job.groups[0].id, "id_number", " 000000026 ", None, SENDERS)
     field = group.commitment.id_number
     assert (field.value, field.raw_value, field.source, field.confidence, field.needs_review) == (
-        "000000026", "000000026", FieldSource.MANUAL, 1.0, False)
+        "000000026", "00000001 8", FieldSource.MANUAL, 1.0, False)
     assert field.reasons == [MANUAL_CORRECTION] and field.explanations
     assert field.bbox == BOX and field.signals[0].value == "000000019"
     correction = job.corrections[0]
@@ -38,6 +38,8 @@ def test_list_item_is_replaced_or_added():
     apply_correction(job, group_id, "central_numbers", "0011111", 0, SENDERS)
     assert [f.value for f in job.groups[0].commitment.central_numbers] == ["0011111", "0099999"]
     assert job.corrections[0].previous_source is FieldSource.NONE  # an added item had no reading
+    assert job.groups[0].commitment.central_numbers[1].raw_value is None
+    assert job.groups[0].commitment.central_numbers[0].raw_value == "0012345"  # the reading is kept
 
 
 def test_date_is_parsed_and_sender_must_be_listed():

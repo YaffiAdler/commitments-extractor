@@ -10,6 +10,7 @@ for the caller to retry (``app/pipeline/calls.py``).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -35,8 +36,11 @@ from app.providers.common import (
     number_from_output,
     page_relation_from_output,
 )
+from app.providers.diagnostics import exception_chain, inspect_base64_image
 from app.providers.prompts import Prompts
 from app.schemas import FormClassification, FormReading, FormType, NumberReading, PageRelation
+
+logger = logging.getLogger(__name__)
 
 API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 API_KEY_ENV = "GEMINI_API_KEY"
@@ -83,12 +87,14 @@ class GeminiProvider:
     name = "gemini"
 
     def __init__(self, model: str, timeout_s: float, client: httpx.Client | None = None,
-                 sleep: Callable[[float], None] = time.sleep, prompts: Prompts | None = None) -> None:
+                 sleep: Callable[[float], None] = time.sleep, prompts: Prompts | None = None,
+                 debug: bool = False) -> None:
         self._model = model
         self._url = API_URL_TEMPLATE.format(model=model)
         self._client = client or httpx.Client(timeout=timeout_s)
         self._sleep = sleep
         self._prompts = prompts or Prompts.load()
+        self._debug = debug
 
     def extract_form(self, pages: list[PageImage], form_type: FormType | None) -> FormReading:
         data = self._generate_json([p.image for p in pages], self._prompts.extract(form_type), FORM_READING_SCHEMA)
@@ -124,20 +130,77 @@ class GeminiProvider:
 
     def _post_with_retry(self, body: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
         for attempt in range(MAX_ATTEMPTS):
-            response = self._post(body, headers)
+            response = self._post(body, headers, attempt + 1)
             if response.status_code not in RETRYABLE_STATUSES or attempt == MAX_ATTEMPTS - 1:
                 break
             self._sleep(RETRY_BASE_DELAY_S * 2 ** attempt)
         if response.status_code == httpx.codes.NOT_FOUND:
             raise ProviderError(f"Gemini API returned HTTP 404: model '{self._model}' not found (set {MODEL_ENV})")
+        if response.status_code in RETRYABLE_STATUSES:
+            raise RetryableProviderError(f"Gemini API returned HTTP {response.status_code}")
         if response.status_code != httpx.codes.OK:
             raise ProviderError(f"Gemini API returned HTTP {response.status_code}")
         return response
 
-    def _post(self, body: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
+    def _post(self, body: dict[str, Any], headers: dict[str, str], attempt: int) -> httpx.Response:
+        started = time.perf_counter()
         try:
-            return self._client.post(self._url, json=body, headers=headers)
+            response = self._client.post(self._url, json=body, headers=headers)
         except httpx.TimeoutException as exc:
+            if self._debug:
+                self._log_call(body, attempt, started, None, exc)
             raise RetryableProviderError("Gemini API timed out") from exc
         except httpx.HTTPError as exc:
+            if self._debug:
+                self._log_call(body, attempt, started, None, exc)
             raise RetryableProviderError(f"Gemini API request failed: {type(exc).__name__}") from exc
+        if self._debug:
+            self._log_call(body, attempt, started, response, None)
+        return response
+
+    def _log_call(self, body: dict[str, Any], attempt: int, started: float,
+                  response: httpx.Response | None, error: BaseException | None) -> None:
+        """One line per HTTP attempt describing the request and the answer's
+        shape (``CE_DEBUG_PROVIDER``); never prompt or answer text, values or the key."""
+        elapsed_s = time.perf_counter() - started
+        parts = body["contents"][0]["parts"]
+        images = [inspect_base64_image(part["inlineData"]["data"], part["inlineData"]["mimeType"])
+                  for part in parts if "inlineData" in part]
+        request_bytes = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        logger.info(
+            "gemini call model=%s attempt=%d/%d max_output_tokens=%d request_bytes=%d images=%d [%s] "
+            "elapsed_s=%.2f %s transport_error=%s",
+            self._model, attempt, MAX_ATTEMPTS, body["generationConfig"]["maxOutputTokens"], request_bytes,
+            len(images), "; ".join(info.describe() for info in images), elapsed_s, _response_shape(response),
+            exception_chain(error) if error else "none",
+        )
+
+
+def _response_shape(response: httpx.Response | None) -> str:
+    """HTTP status, API error status and detail reasons (quota ids, retry
+    delay), finish reason, part kinds and token counts; never answer text."""
+    if response is None:
+        return "http=None"
+    try:
+        payload = response.json()
+    except ValueError:
+        return f"http={response.status_code} body=not-json content_type={response.headers.get('content-type')}"
+    if not isinstance(payload, dict):
+        return f"http={response.status_code} body=not-an-object"
+    error = payload.get("error") if isinstance(payload.get("error"), dict) else None
+    if error is not None:
+        details = [
+            {key: detail[key] for key in ("@type", "reason", "retryDelay") if key in detail}
+            | ({"quota_ids": [v.get("quotaId") for v in detail["violations"]]} if "violations" in detail else {})
+            for detail in error.get("details") or [] if isinstance(detail, dict)
+        ]
+        return (f"http={response.status_code} error_status={error.get('status')} details={details} "
+                f"retry_after={response.headers.get('retry-after')}")
+    candidates = payload.get("candidates") or []
+    first = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+    part_kinds = ["thought" if part.get("thought") else "text" if "text" in part else "other"
+                  for part in first.get("content", {}).get("parts", [])]
+    usage = {key: value for key, value in (payload.get("usageMetadata") or {}).items() if key.endswith("Count")}
+    return (f"http={response.status_code} response_id={payload.get('responseId')} "
+            f"finish_reason={first.get('finishReason')} block_reason="
+            f"{(payload.get('promptFeedback') or {}).get('blockReason')} parts={part_kinds} usage={usage}")

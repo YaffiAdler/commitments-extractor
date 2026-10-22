@@ -59,7 +59,7 @@ def test_jobs_beyond_the_limit_wait_as_pending(store, tmp_path):
     runner = JobRunner(store, pipeline, max_concurrent_jobs=2)
 
     async def scenario() -> None:
-        tasks = [asyncio.create_task(runner.submit(job, tmp_path / "f.pdf")) for job in jobs]
+        tasks = [asyncio.create_task(runner.submit(job, [tmp_path / "f.pdf"])) for job in jobs]
         while pipeline.running < 2:
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.1)  # time for a third job to start, if the limit were broken
@@ -76,7 +76,7 @@ def test_jobs_beyond_the_limit_wait_as_pending(store, tmp_path):
 def test_failed_job_logs_type_and_id_only(store, tmp_path, caplog, capsys):
     job = _stored_job(store)
     with caplog.at_level(logging.DEBUG):
-        JobRunner(store, FailingPipeline(), max_concurrent_jobs=1).run(job, tmp_path / "f.pdf")
+        JobRunner(store, FailingPipeline(), max_concurrent_jobs=1).run(job, [tmp_path / "f.pdf"])
     assert FIELD_VALUE not in caplog.text
     assert all(record.exc_info is None and not record.exc_text for record in caplog.records)
     failure = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
@@ -93,7 +93,7 @@ def test_unexpected_failure_is_recorded_on_the_job(store, tmp_path):
             raise RuntimeError(f"dummy {FIELD_VALUE}")
 
     job = _stored_job(store)
-    JobRunner(store, BrokenPipeline(), max_concurrent_jobs=1).run(job, tmp_path / "f.pdf")
+    JobRunner(store, BrokenPipeline(), max_concurrent_jobs=1).run(job, [tmp_path / "f.pdf"])
     stored = store.get(job.id)
     assert (stored.status, stored.error) == (JobStatus.FAILED, "RuntimeError")
 
@@ -108,7 +108,7 @@ def test_progress_is_saved_to_the_store(store, tmp_path):
             return job
 
     job = _stored_job(store)
-    JobRunner(store, ProgressPipeline(), max_concurrent_jobs=1).run(job, tmp_path / "f.pdf")
+    JobRunner(store, ProgressPipeline(), max_concurrent_jobs=1).run(job, [tmp_path / "f.pdf"])
     assert store.get(job.id).status is JobStatus.DONE
 
 
@@ -120,6 +120,6 @@ def test_start_and_finish_times_are_saved(store, tmp_path):
             return job
 
     job = _stored_job(store)
-    JobRunner(store, DonePipeline(), max_concurrent_jobs=1).run(job, tmp_path / "f.pdf")
+    JobRunner(store, DonePipeline(), max_concurrent_jobs=1).run(job, [tmp_path / "f.pdf"])
     loaded = store.get(job.id)
     assert loaded.started_at <= loaded.finished_at

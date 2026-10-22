@@ -8,6 +8,7 @@ exceptions are set by the host and read without a prefix: ``DATABASE_URL``
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
@@ -16,6 +17,10 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ENV_PREFIX = "CE_"
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+# A guessable demo code would make the access check pointless.
+MIN_ACCESS_TOKEN_LENGTH = 16
+# A browser ``Origin`` value: scheme and host (and port), nothing after.
+_ORIGIN = re.compile(r"https?://[^/\s*]+")
 
 
 class ProviderName(str, Enum):
@@ -229,6 +234,8 @@ class Settings:
     provider: ProviderName = field(default_factory=lambda: ProviderName(_env("provider", ProviderName.CLAUDE.value)))
     claude_model: str = field(default_factory=lambda: _env("claude_model", "claude-opus-5-5"))
     claude_timeout_s: float = field(default_factory=lambda: float(_env("claude_timeout_s", "60")))
+    # Log the shape of every provider request and answer (sizes, types, status; never values or text).
+    debug_provider: bool = field(default_factory=lambda: _env_bool("debug_provider", False))
     gemini_model: str = field(default_factory=lambda: _env("gemini_model", "gemini-3.8-flash"))
     # Gemini thinking models take well over a minute on a full scanned page.
     gemini_timeout_s: float = field(default_factory=lambda: float(_env("gemini_timeout_s", "180")))
@@ -254,7 +261,9 @@ class Settings:
     # Temporary files of a job (upload, page images, export) are deleted this many seconds
     # after the job directory was last written, or with the job, whichever comes first.
     file_ttl_s: int = field(default_factory=lambda: int(_env("file_ttl_s", "3600")))
+    # Per uploaded file; one upload (``POST /jobs``) holds at most ``max_files`` files.
     max_upload_mb: int = field(default_factory=lambda: int(_env("max_upload_mb", "50")))
+    max_files: int = field(default_factory=lambda: int(_env("max_files", "20")))
     max_pages: int = field(default_factory=lambda: int(_env("max_pages", "200")))
     # Pixels per page image (width x height); also set as PIL's ``Image.MAX_IMAGE_PIXELS``.
     # 50M covers A3 at 400 DPI and keeps one RGB copy around 150 MB.
@@ -263,9 +272,28 @@ class Settings:
     max_concurrent_jobs: int = field(default_factory=lambda: int(_env("max_concurrent_jobs", "2")))
     # Level of the app's logs on stdout (DEBUG, INFO, WARNING, ERROR, CRITICAL).
     log_level: str = field(default_factory=lambda: _env("log_level", "INFO").strip().upper())
-    # Browser origins allowed to call the API (e.g. the Vercel frontend), comma-separated.
+    # Browser origins allowed to call the API (e.g. the Vercel frontend), comma-separated,
+    # each exactly ``scheme://host[:port]``; ``*`` is refused.
     # Empty = no CORS headers at all (same-origin use, e.g. through the Vite proxy).
     allowed_origins: tuple[str, ...] = field(default_factory=lambda: _env_list("allowed_origins"))
+    # Pages over all files of one upload, counted before the job is created (per file: ``max_pages``).
+    max_job_pages: int = field(default_factory=lambda: int(_env("max_job_pages", "200")))
+
+    # Shared access code of the demo, sent as ``Authorization: Bearer <token>`` (or ``?access_token=``
+    # on GET, for EventSource). Empty = no check (local use). A secret: never logged (left out of repr).
+    demo_access_token: str = field(default_factory=lambda: _env("demo_access_token", "").strip(), repr=False)
+    # Refuse to start without ``demo_access_token`` (set on the deployment, so a forgotten token fails closed).
+    require_access_token: bool = field(default_factory=lambda: _env_bool("require_access_token", False))
+    # Requests per client IP per minute (``/health`` excluded), and uploads (``POST /jobs``) per hour. 0 = off.
+    rate_limit_per_minute: int = field(default_factory=lambda: int(_env("rate_limit_per_minute", "300")))
+    upload_limit_per_hour: int = field(default_factory=lambda: int(_env("upload_limit_per_hour", "30")))
+    # Reverse proxies in front of the app that append to ``X-Forwarded-For``. 0 = the client IP is the
+    # socket peer; n = the n-th address from the right (proxies append, so a client cannot forge it).
+    trusted_proxy_hops: int = field(default_factory=lambda: int(_env("trusted_proxy_hops", "0")))
+    # Seconds between purges of expired jobs and files while the server runs.
+    purge_interval_s: float = field(default_factory=lambda: float(_env("purge_interval_s", "300")))
+    # Delete every job directory under ``tmp_dir`` at startup and at shutdown.
+    clear_tmp_on_restart: bool = field(default_factory=lambda: _env_bool("clear_tmp_on_restart", True))
 
     preprocess: PreprocessSettings = field(default_factory=PreprocessSettings)
     extraction: ExtractionSettings = field(default_factory=ExtractionSettings)
@@ -283,9 +311,9 @@ class Settings:
         if min(self.claude_timeout_s, self.gemini_timeout_s, self.local_vlm_timeout_s, self.ocr_timeout_s,
                self.job_ttl_s, self.file_ttl_s, self.db_timeout_s) <= 0:
             raise ValueError("timeouts and TTL must be positive")
-        if min(self.max_upload_mb, self.max_pages, self.max_image_pixels, self.max_concurrent_jobs,
+        if min(self.max_upload_mb, self.max_files, self.max_pages, self.max_image_pixels, self.max_concurrent_jobs,
                self.db_pool_size) <= 0:
-            raise ValueError("upload, page, pixel, job and pool limits must be positive")
+            raise ValueError("upload, file, page, pixel, job and pool limits must be positive")
         if self.storage is StorageName.POSTGRES and not self.database_url:
             raise ValueError(f"storage postgres needs {DATABASE_URL_ENV}")
         if not 0.0 <= self.review_threshold <= 1.0:
@@ -294,3 +322,19 @@ class Settings:
             raise ValueError("segment weight vlm must stay below review_threshold")
         if self.log_level not in LOG_LEVELS:
             raise ValueError(f"log_level must be one of {', '.join(LOG_LEVELS)}")
+        self._check_demo_protection()
+
+    def _check_demo_protection(self) -> None:
+        bad_origins = [origin for origin in self.allowed_origins if not _ORIGIN.fullmatch(origin)]
+        if bad_origins:
+            # The values are URLs, not secrets: naming them makes a typo on the host easy to find.
+            raise ValueError(f"{ENV_PREFIX}ALLOWED_ORIGINS must list scheme://host[:port] origins without a path "
+                             f"or trailing slash ('*' is not allowed): {bad_origins}")
+        if self.require_access_token and not self.demo_access_token:
+            raise ValueError(f"{ENV_PREFIX}REQUIRE_ACCESS_TOKEN is on but {ENV_PREFIX}DEMO_ACCESS_TOKEN is empty")
+        if self.demo_access_token and len(self.demo_access_token) < MIN_ACCESS_TOKEN_LENGTH:
+            raise ValueError(f"{ENV_PREFIX}DEMO_ACCESS_TOKEN must be at least {MIN_ACCESS_TOKEN_LENGTH} characters")
+        if min(self.rate_limit_per_minute, self.upload_limit_per_hour, self.trusted_proxy_hops) < 0:
+            raise ValueError("rate limits and trusted_proxy_hops must not be negative")
+        if self.max_job_pages <= 0 or self.purge_interval_s <= 0:
+            raise ValueError("max_job_pages and purge_interval_s must be positive")

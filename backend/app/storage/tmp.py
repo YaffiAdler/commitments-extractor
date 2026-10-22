@@ -43,13 +43,21 @@ class TempStorage:
     def purge_older_than(self, ttl_s: float, now: float | None = None) -> list[str]:
         """Delete job directories last modified more than ``ttl_s`` seconds ago
         (including ones left over from a previous run); return their ids."""
-        if not self._root.is_dir():
-            return []
         cutoff = (time.time() if now is None else now) - ttl_s
-        expired = [
-            d.name for d in self._root.iterdir()
-            if d.is_dir() and _JOB_ID.fullmatch(d.name) and d.stat().st_mtime < cutoff
-        ]
+        expired = [d.name for d in self._job_dirs() if d.stat().st_mtime < cutoff]
         for job_id in expired:
             self.delete_job(job_id)
         return expired
+
+    def clear(self) -> list[str]:
+        """Delete every job directory (at startup / shutdown); return their ids. Anything
+        else under the root is left alone, in case the root is a shared directory."""
+        cleared = [d.name for d in self._job_dirs()]
+        for job_id in cleared:
+            self.delete_job(job_id)
+        return cleared
+
+    def _job_dirs(self) -> list[Path]:
+        if not self._root.is_dir():
+            return []
+        return [d for d in self._root.iterdir() if d.is_dir() and _JOB_ID.fullmatch(d.name)]

@@ -30,6 +30,7 @@ from app.pipeline.calls import ProviderCalls
 from app.pipeline.ingest import PageImage
 from app.pipeline.read_form import FormReader
 from app.providers.base import ExtractionProvider
+from app.providers.diagnostics import exception_chain
 from app.schemas import EXTRACTION_FAILED, FormGroup, FormType, Job, JobStatus, Sender
 from app.storage.page_images import PageImageStore
 
@@ -118,8 +119,8 @@ class Orchestrator:
         except Exception as exc:  # one failed form must not stop the others; it is recorded on the form
             group.error = type(exc).__name__
             group.form_reasons.append(EXTRACTION_FAILED)
-            logger.warning("form %s (file %s, %d pages) failed: %s", group.id, group.source_file,
-                           len(group.pages), group.error)
+            logger.warning("form %s (file %s, %d pages) failed after %d calls: %s", group.id, group.source_file,
+                           len(group.pages), calls.count, exception_chain(exc))
         finally:
             group.vlm_calls = calls.count
             group.read_ms = round((time.perf_counter() - started) * MS_PER_S)

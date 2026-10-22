@@ -1,9 +1,10 @@
-"""Manual corrections by a reviewer (``PATCH /jobs/{id}/groups/{group}/fields/{field}``).
+"""Manual corrections by a reviewer (``PATCH /jobs/{id}/commitments/{cid}/fields/{field}``).
 
-A corrected field takes the reviewer's value as both ``value`` and
-``raw_value``, ``source=manual``, confidence 1 and no review flag, with the
-single reason ``manual_correction``. Its box and its earlier readings
-(``signals``) are kept, so the crop and the history stay available. Every
+A corrected field takes the reviewer's value as ``value``, ``source=manual``,
+confidence 1 and no review flag, with the single reason ``manual_correction``.
+``raw_value`` keeps the text as it was read from the form (None for an added
+list item or a field that was not found), and the box and earlier readings
+(``signals``) are kept too, so the crop and the history stay available. Every
 correction is also recorded in ``Job.corrections`` with the previous raw value
 and source. Values are patient data: the errors below never quote them.
 """
@@ -105,8 +106,8 @@ def _corrected_field(name: str, text: str, previous: Field[Any] | None, senders:
     # The exact generic type, so the commitment serializes without type warnings.
     field_type = Field[date] if name in DATE_FIELDS else Field[str]
     return field_type(
-        value=parsed, raw_value=text, confidence=1.0, needs_review=False, reasons=reasons,
-        explanations=explain(reasons), source=FieldSource.MANUAL,
+        value=parsed, raw_value=previous.raw_value if previous else None, confidence=1.0, needs_review=False,
+        reasons=reasons, explanations=explain(reasons), source=FieldSource.MANUAL,
         bbox=previous.bbox if previous else None,
         signals=previous.signals if previous else [],
     )

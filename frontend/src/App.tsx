@@ -1,82 +1,43 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { type FormGroup, type Job, type JobProgress, deleteJob, exportJob, getJob, getSenders, streamJob, uploadFiles } from './api'
+import { ExportButton } from './components/ExportButton'
+import { FieldPanel } from './components/FieldPanel'
+import { Icon } from './components/Icon'
+import { ReviewTable } from './components/ReviewTable'
+import { UploadPanel } from './components/UploadPanel'
+import { failureText } from './messages'
 import {
-  type Commitment,
-  type Field,
-  type FormGroup,
-  type Job,
-  type JobProgress,
-  SPLIT_UNCERTAIN,
-  deleteJob,
-  exportJob,
-  getCrop,
-  getJob,
-  streamJob,
-  uploadFile,
-} from './api'
+  type FieldTarget,
+  formFlags,
+  mergeRows,
+  nextReviewTarget,
+  pageNumbers,
+  progressOf,
+  reviewTargets,
+  sortGroups,
+  targetKey,
+} from './review'
 
 // Polling is the fallback when the event stream is unavailable.
 const POLL_INTERVAL_MS = 1000
 const EXPORT_FILE_NAME = 'commitments.xlsx'
-
-const COLUMNS: { header: string; key: keyof Commitment }[] = [
-  { header: 'שם פרטי', key: 'first_name' },
-  { header: 'שם משפחה', key: 'last_name' },
-  { header: 'ת.ז.', key: 'id_number' },
-  { header: 'מספר מרכזי', key: 'central_numbers' },
-  { header: 'תאריך קבלה', key: 'received_date' },
-  { header: 'גורם שולח', key: 'sender' },
-  { header: 'מספר התחייבות', key: 'commitment_numbers' },
-]
+// The browser must start the download before the blob URL is revoked.
+const REVOKE_DELAY_MS = 1000
 
 const STATUS_TEXT: Record<Job['status'], string> = {
-  pending: 'ממתין…',
-  running: 'מעבד…',
-  done: 'הסתיים',
+  pending: 'ממתין לעיבוד',
+  running: 'מעבד',
+  done: 'העיבוד הסתיים',
   failed: 'העיבוד נכשל',
 }
-
-// Mirrors Commitment.field_needs_review: an empty list field is flagged unless optional.
-function cell(value: Field | Field[], optional: boolean): { text: string; review: boolean } {
-  if (Array.isArray(value)) {
-    return {
-      text: value.map((f) => f.value).filter(Boolean).join('; '),
-      review: (value.length === 0 && !optional) || value.some((f) => f.needs_review),
-    }
-  }
-  return { text: value.value ?? '', review: value.needs_review }
-}
-
-const SPLIT_UNCERTAIN_TEXT = 'ייתכן שפוצל לא נכון'
-const IMAGE_GONE_TEXT = 'התמונה כבר לא זמינה'
-
-// Values of a cell that have a box on the page; item is the list index (null for a single field).
-function boxedItems(value: Field | Field[]): (number | null)[] {
-  if (Array.isArray(value)) return value.flatMap((f, i) => (f.bbox ? [i] : []))
-  return value.bbox ? [null] : []
-}
-
-type Preview = { title: string; url: string | null }
-
-// Pages are 0-based in the API and 1-based for the reader.
-const pageNumbers = (pages: number[]) => pages.map((p) => p + 1).join(', ')
-
-const splitUncertain = (group: FormGroup) => group.split_reasons.includes(SPLIT_UNCERTAIN)
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const isActive = (job: Job) => job.status === 'pending' || job.status === 'running'
 
-// Same numbers as the 'progress' event, for the polling fallback.
-const progressOf = (job: Job): JobProgress => ({
-  status: job.status,
-  forms_total: job.groups.length,
-  forms_done: job.groups.filter((g) => g.finished).length,
-})
-
-// Rows arrive as forms finish, in any order; keep them in page order.
-function mergeRows(groups: FormGroup[], rows: FormGroup[]): FormGroup[] {
-  const ids = new Set(rows.map((r) => r.id))
-  return [...groups.filter((g) => !ids.has(g.id)), ...rows].sort((a, b) => a.pages[0] - b.pages[0])
+function focusCell(target: FieldTarget) {
+  // After React has rendered the table with the new state.
+  requestAnimationFrame(() => document.querySelector<HTMLElement>(`button[data-target="${targetKey(target)}"]`)?.focus())
 }
 
 function App() {
@@ -84,26 +45,19 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<JobProgress | null>(null)
-  // url null: the page image is gone (file TTL or server restart).
-  const [preview, setPreview] = useState<Preview | null>(null)
+  const [selected, setSelected] = useState<FieldTarget | null>(null)
+  const [onlyUncertain, setOnlyUncertain] = useState(false)
+  const [senders, setSenders] = useState<string[]>([])
 
-  function showPreview(next: Preview | null) {
-    setPreview((current) => {
-      if (current?.url) URL.revokeObjectURL(current.url)
-      return next
-    })
-  }
+  useEffect(() => {
+    // Without the list the sender field is still editable; the backend checks the name.
+    getSenders().then(setSenders, () => setSenders([]))
+  }, [])
 
-  async function handleCrop(group: FormGroup, key: string, header: string, item: number | null) {
-    if (!job) return
-    const title = item === null ? header : `${header} ${item + 1}`
-    try {
-      const crop = await getCrop(job.id, group.id, key, item)
-      showPreview({ title, url: crop.kind === 'image' ? URL.createObjectURL(crop.blob) : null })
-    } catch (e) {
-      setError(`טעינת התמונה נכשלה (${(e as Error).message})`)
-    }
-  }
+  // Only forms whose reading finished (polling also returns the unfinished ones), in file and page order.
+  const rows = useMemo(() => (job ? sortGroups(job.groups.filter((g) => g.finished), job.files) : []), [job])
+  const fileIndex = useCallback((group: FormGroup) => job?.files.indexOf(group.source_file) ?? 0, [job])
+  const selectedGroup = selected ? rows.find((g) => g.id === selected.groupId) : undefined
 
   async function pollJob(jobId: string) {
     let current = await getJob(jobId)
@@ -124,7 +78,7 @@ function App() {
           setProgress(p)
           setJob((current) => current && { ...current, status: p.status })
         },
-        onRows: (rows) => setJob((current) => current && { ...current, groups: mergeRows(current.groups, rows) }),
+        onRows: (newRows) => setJob((current) => current && { ...current, groups: mergeRows(current.groups, newRows) }),
       })
       setJob(finished)
       setProgress(progressOf(finished))
@@ -134,135 +88,207 @@ function App() {
     }
   }
 
-  async function handleUpload(file: File) {
+  async function handleUpload(files: File[]) {
     setError(null)
     setBusy(true)
     setProgress(null)
-    showPreview(null)
+    setSelected(null)
     try {
-      if (job) await deleteJob(job.id)
-      const created = await uploadFile(file)
+      // One job at a time on the screen; the previous one is deleted from the server.
+      if (job) await deleteJob(job.id).catch(() => undefined)
+      setJob(null)
+      const created = await uploadFiles(files)
       setJob(created)
+      setProgress(progressOf(created))
       if (isActive(created)) await followJob(created.id)
     } catch (e) {
-      setError(`ההעלאה נכשלה (${(e as Error).message})`)
+      setError(failureText('ההעלאה נכשלה', e))
     } finally {
       setBusy(false)
     }
   }
 
-  // Only forms whose reading finished (polling also returns the unfinished ones).
-  const rows = job?.groups.filter((g) => g.finished) ?? []
-
   async function handleExport() {
     if (!job) return
+    setError(null)
     try {
       const url = URL.createObjectURL(await exportJob(job.id))
       const link = document.createElement('a')
       link.href = url
       link.download = EXPORT_FILE_NAME
       link.click()
-      URL.revokeObjectURL(url)
+      setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS)
     } catch (e) {
-      setError(`הייצוא נכשל (${(e as Error).message})`)
+      setError(failureText('הייצוא נכשל', e))
     }
   }
 
-  return (
-    <main>
-      <h1>חילוץ התחייבויות</h1>
+  async function handleDelete() {
+    if (!job) return
+    setError(null)
+    try {
+      await deleteJob(job.id)
+      setJob(null)
+      setProgress(null)
+      setSelected(null)
+    } catch (e) {
+      setError(failureText('המחיקה נכשלה', e))
+    }
+  }
 
-      <section className="toolbar">
-        <label className="button">
-          העלאת קובץ (PDF או תמונה)
-          <input
-            type="file"
-            accept="application/pdf,image/png,image/jpeg,image/tiff,image/webp"
-            disabled={busy}
-            hidden
-            onChange={(e) => {
-              const file = e.target.files?.[0]
-              e.target.value = ''
-              if (file) void handleUpload(file)
-            }}
-          />
-        </label>
-        <button type="button" onClick={handleExport} disabled={job?.status !== 'done'}>
-          ייצוא לאקסל
-        </button>
-        {job && <span>{STATUS_TEXT[job.status]}</span>}
-        {job && isActive(job) && progress && progress.forms_total > 0 && (
-          <span>
-            {progress.forms_done}/{progress.forms_total} טפסים
+  const select = useCallback((target: FieldTarget) => setSelected(target), [])
+
+  function navigate(step: 1 | -1) {
+    const next = nextReviewTarget(rows, selected, step)
+    if (next) setSelected(next)
+  }
+
+  function handleSaved(updated: Job, target: FieldTarget) {
+    setJob(updated)
+    const updatedRows = sortGroups(updated.groups.filter((g) => g.finished), updated.files)
+    // After a confirmation the next orange field opens, so the reviewer can keep typing.
+    const next = nextReviewTarget(updatedRows, target, 1)
+    setSelected(next ?? target)
+  }
+
+  function closePanel() {
+    if (selected) focusCell(selected)
+    setSelected(null)
+  }
+
+  const unconfirmed = reviewTargets(rows).length
+  const flaggedForms = rows.filter((g) => formFlags(g).length > 0).length
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            <Icon name="file" size={18} />
           </span>
-        )}
+          <span className="brand-name">חילוץ התחייבויות</span>
+        </div>
+        <nav className="breadcrumbs" aria-label="מיקום">
+          אגף דיאגנוסטיקה <span aria-hidden="true">›</span> המעבדה המרכזית לנגיפים <span aria-hidden="true">›</span>{' '}
+          <span className="current">טפסי התחייבות</span>
+        </nav>
+      </header>
+
+      <section className="hero">
+        <HeroLines />
+        <div className="hero-text">
+          <h1>חילוץ התחייבויות</h1>
+          <p>טפסי התחייבות שהתקבלו במעבדה המרכזית לנגיפים · קריאה, בדיקה וייצוא לאקסל</p>
+        </div>
       </section>
 
-      {error && <p className="error">{error}</p>}
+      <div className={`layout${selectedGroup ? ' with-panel' : ''}`}>
+      <main>
+        <header className="page-header">
+          {job ? (
+            <dl className="stats" aria-label="סיכום העבודה">
+              <div>
+                <dt>טפסים</dt>
+                <dd>{rows.length}</dd>
+              </div>
+              <div className={unconfirmed > 0 ? 'attention' : undefined}>
+                <dt>שדות לבדיקה</dt>
+                <dd>{unconfirmed}</dd>
+              </div>
+              <div className={flaggedForms > 0 ? 'flagged' : undefined}>
+                <dt>טפסים עם דגל</dt>
+                <dd>{flaggedForms}</dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="muted">העלו קבצים, עברו על השדות המסומנים וייצאו לאקסל</p>
+          )}
+          {job && (
+            <section className="job-bar" aria-label="פעולות על העבודה">
+              <span role="status" className={`job-status ${job.status}`}>
+                {STATUS_TEXT[job.status]}
+                {job.status === 'failed' && job.error && ` (${job.error})`}
+              </span>
+              <button type="button" className="ghost" onClick={() => void handleDelete()} disabled={busy && isActive(job)}>
+                <Icon name="trash" />
+                מחיקת העבודה מהשרת
+              </button>
+              <ExportButton
+                disabled={job.status !== 'done'}
+                unconfirmedFields={unconfirmed}
+                flaggedForms={flaggedForms}
+                onExport={() => void handleExport()}
+              />
+            </section>
+          )}
+        </header>
 
-      {rows.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              {COLUMNS.map((c) => (
-                <th key={c.key}>{c.header}</th>
-              ))}
-              <th>עמודים</th>
-              <th>פיצול</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((group) => (
-              <tr key={group.id}>
-                {COLUMNS.map((c) => {
-                  const value = group.commitment[c.key] as Field | Field[]
-                  const { text, review } = cell(value, group.commitment.optional_fields.includes(c.key))
-                  return (
-                    <td key={c.key} className={review ? 'review' : undefined}>
-                      {text}
-                      {boxedItems(value).map((item) => (
-                        <button
-                          type="button"
-                          className="crop-link"
-                          key={item ?? 'single'}
-                          onClick={() => void handleCrop(group, c.key, c.header, item)}
-                        >
-                          {item === null ? 'תמונה' : `תמונה ${item + 1}`}
-                        </button>
-                      ))}
-                    </td>
-                  )
-                })}
-                <td>{pageNumbers(group.pages)}</td>
-                <td className={splitUncertain(group) ? 'review' : undefined}>
-                  {splitUncertain(group) ? SPLIT_UNCERTAIN_TEXT : ''}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <UploadPanel busy={busy} progress={job && isActive(job) ? progress : null} onUpload={(f) => void handleUpload(f)} />
+
+        {error && (
+          <p className="error banner" role="alert">
+            {error}
+          </p>
+        )}
+
+        {rows.length > 0 && (
+          <ReviewTable
+            groups={rows}
+            fileIndex={fileIndex}
+            multipleFiles={(job?.files.length ?? 0) > 1}
+            selected={selected}
+            onSelect={select}
+            onlyUncertain={onlyUncertain}
+            onOnlyUncertainChange={setOnlyUncertain}
+          />
+        )}
+
+        {job && job.irrelevant_pages.length > 0 && (
+          <p className="muted small">עמודים שלא שויכו לאף טופס: {pageNumbers(job.irrelevant_pages.map((p) => p.page))}</p>
+        )}
+
+        <ul className="legend" aria-label="מקרא">
+          <li>
+            <span className="review swatch" /> שדה שדורש בדיקה ידנית
+          </li>
+          <li>
+            <span className="manual swatch" /> תוקן ידנית
+          </li>
+        </ul>
+      </main>
+
+      {job && selected && selectedGroup && (
+        <FieldPanel
+          key={targetKey(selected)}
+          job={job}
+          group={selectedGroup}
+          target={selected}
+          senders={senders}
+          onSaved={handleSaved}
+          onNavigate={navigate}
+          onClose={closePanel}
+        />
       )}
+      </div>
+    </div>
+  )
+}
 
-      {preview && (
-        <section className="preview">
-          <strong>{preview.title}</strong>
-          {preview.url ? <img src={preview.url} alt={preview.title} /> : <p className="review-note">{IMAGE_GONE_TEXT}</p>}
-          <button type="button" onClick={() => showPreview(null)}>
-            סגירה
-          </button>
-        </section>
-      )}
+// Concentric arcs (teal, pink, sand) at the far side of the title, centred below the strip.
+const HERO_ARCS: [radius: number, color: string][] = [
+  [250, 'var(--teal)'],
+  [205, 'var(--pink-light)'],
+  [160, 'var(--sand)'],
+  [115, 'var(--teal-light)'],
+]
 
-      {job && job.irrelevant_pages.length > 0 && (
-        <p className="review-note">
-          עמודים שלא שויכו לאף טופס: {pageNumbers(job.irrelevant_pages.map((p) => p.page))}
-        </p>
-      )}
-
-      <p className="legend">
-        <span className="review swatch" /> שדה שדורש בדיקה ידנית
-      </p>
-    </main>
+function HeroLines() {
+  return (
+    <svg className="hero-lines" viewBox="0 0 520 260" aria-hidden="true">
+      {HERO_ARCS.map(([radius, color]) => (
+        <circle key={radius} cx="260" cy="300" r={radius} stroke={color} />
+      ))}
+    </svg>
   )
 }
 

@@ -1,0 +1,62 @@
+# Render Blueprint for the demo backend (see docs/DEPLOY.md). The frontend is on Vercel.
+# Secrets and deployment-specific values are `sync: false`: Render asks for them in the
+# dashboard when the Blueprint is created; they are never stored in this file.
+services:
+  - type: web
+    name: commitments-extractor-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: false
+    buildFilter:
+      paths:
+        - backend/**
+    envVars:
+      # --- entered by hand in the Render dashboard ---
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CE_DEMO_ACCESS_TOKEN
+        sync: false
+      - key: CE_ALLOWED_ORIGINS
+        sync: false
+      # --- demo settings (not secret) ---
+      - key: CE_PROVIDER
+        value: claude
+      # Refuse to start without CE_DEMO_ACCESS_TOKEN.
+      - key: CE_REQUIRE_ACCESS_TOKEN
+        value: "true"
+      # Jobs in memory only: lost on restart, nothing kept on disk or in a database.
+      - key: CE_STORAGE
+        value: memory
+      - key: CE_JOB_TTL_S
+        value: "1800"
+      - key: CE_FILE_TTL_S
+        value: "1800"
+      - key: CE_PURGE_INTERVAL_S
+        value: "120"
+      # Small limits for a 512 MB instance and a pay-per-call API key.
+      - key: CE_MAX_UPLOAD_MB
+        value: "10"
+      - key: CE_MAX_FILES
+        value: "3"
+      - key: CE_MAX_PAGES
+        value: "6"
+      - key: CE_MAX_JOB_PAGES
+        value: "6"
+      - key: CE_MAX_IMAGE_PIXELS
+        value: "12000000"
+      - key: CE_RENDER_DPI
+        value: "200"
+      - key: CE_MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: CE_EXTRACT_CONCURRENCY
+        value: "2"
+      - key: CE_RATE_LIMIT_PER_MINUTE
+        value: "120"
+      - key: CE_UPLOAD_LIMIT_PER_HOUR
+        value: "10"
+      # Render's proxy appends the client address to X-Forwarded-For.
+      - key: CE_TRUSTED_PROXY_HOPS
+        value: "1"

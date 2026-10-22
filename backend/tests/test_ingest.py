@@ -10,6 +10,7 @@ from app.config import Settings
 from app.pipeline.ingest import (
     CorruptFileError,
     EncryptedPdfError,
+    count_pages,
     FileKind,
     FileTooLargeError,
     IngestLimits,
@@ -217,3 +218,20 @@ def test_pdf_scan_pixel_limit(tmp_path):
     assert load_file(path, _limits(max_image_pixels=100 * 141))
     with pytest.raises(FileTooLargeError):
         load_file(path, _limits(max_image_pixels=100 * 141 - 1))
+
+
+def test_count_pages_pdf_and_images(tmp_path):
+    path = tmp_path / "three.pdf"
+    _vector_pdf(path, pages=3)
+    assert count_pages(path.read_bytes(), FileKind.PDF) == 3
+    assert count_pages(_png_bytes(20, 20), FileKind.PNG) == 1
+    tiff = io.BytesIO()
+    frames = [Image.new("L", (10, 10), level) for level in (0, 255)]
+    frames[0].save(tiff, "TIFF", save_all=True, append_images=frames[1:])
+    assert count_pages(tiff.getvalue(), FileKind.TIFF) == 2
+
+
+@pytest.mark.parametrize("content, kind", [(b"%PDF-1.4 broken", FileKind.PDF), (b"\x89PNG\r\n\x1a\n", FileKind.PNG)])
+def test_count_pages_unreadable(content, kind):
+    with pytest.raises(CorruptFileError):
+        count_pages(content, kind)

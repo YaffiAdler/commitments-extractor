@@ -135,7 +135,7 @@ def test_overload_gives_up_after_max_attempts(api_key):
         calls.append(request)
         return httpx.Response(503)
 
-    with pytest.raises(ProviderError, match="HTTP 503"):
+    with pytest.raises(RetryableProviderError, match="HTTP 503"):
         _provider(handler, []).extract_form([_page()], None)
     assert len(calls) == MAX_ATTEMPTS
 
@@ -181,3 +181,63 @@ def test_classify_parses_answer_and_unknown_type(api_key):
 
     result = _provider(handler).classify([_page()], form_types)
     assert (result.form_type, result.sender_raw) == ("unknown", None)
+
+
+DIAGNOSTICS_LOGGER = "app.providers.gemini"
+
+
+def _debug_provider(handler) -> GeminiProvider:
+    return GeminiProvider("test-model", 1.0, client=httpx.Client(transport=httpx.MockTransport(handler)),
+                          sleep=lambda _: None, debug=True)
+
+
+def _diagnostic_lines(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == DIAGNOSTICS_LOGGER]
+
+
+def test_debug_off_by_default_logs_nothing(api_key, caplog):
+    caplog.set_level("INFO", logger=DIAGNOSTICS_LOGGER)
+    with pytest.raises(RetryableProviderError):
+        _provider(lambda request: httpx.Response(503)).read_number(np.zeros((5, 5, 3), np.uint8))
+    assert not _diagnostic_lines(caplog)
+
+
+def test_debug_logs_each_attempt_with_quota_reason_and_no_secrets(api_key, caplog):
+    quota_error = {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "dummy 123", "details": [
+        {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+         "violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]},
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "41s"}]}}
+    caplog.set_level("INFO", logger=DIAGNOSTICS_LOGGER)
+    with pytest.raises(RetryableProviderError):
+        _debug_provider(lambda request: httpx.Response(429, json=quota_error)).extract_form([_page()], None)
+    lines = _diagnostic_lines(caplog)
+    assert [f"attempt={n}/4" in line for n, line in enumerate(lines, 1)] == [True] * 4
+    for expected in ("model=test-model", "images=1", "image/jpeg(actual image/jpeg)", "http=429",
+                     "error_status=RESOURCE_EXHAUSTED", "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                     "'retryDelay': '41s'", "transport_error=none"):
+        assert expected in lines[0]
+    assert "dummy" not in "".join(lines)
+
+
+def test_debug_logs_answer_shape_without_text(api_key, caplog):
+    answer = {"responseId": "resp-1", "usageMetadata": {"promptTokenCount": 10, "thoughtsTokenCount": 7},
+              "candidates": [{"finishReason": "STOP", "content": {"parts": [
+                  {"text": "dummy thought", "thought": True}, {"text": '{"value": "98765"}'}]}}]}
+    caplog.set_level("INFO", logger=DIAGNOSTICS_LOGGER)
+    _debug_provider(lambda request: httpx.Response(200, json=answer)).read_number(np.zeros((5, 5, 3), np.uint8))
+    (line,) = _diagnostic_lines(caplog)
+    for expected in ("http=200", "response_id=resp-1", "finish_reason=STOP", "parts=['thought', 'text']",
+                     "'thoughtsTokenCount': 7"):
+        assert expected in line
+    assert "98765" not in line and "dummy" not in line
+
+
+def test_debug_logs_the_cause_of_a_timeout(api_key, caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("dummy", request=request)
+
+    caplog.set_level("INFO", logger=DIAGNOSTICS_LOGGER)
+    with pytest.raises(RetryableProviderError):
+        _debug_provider(handler).extract_form([_page()], None)
+    (line,) = _diagnostic_lines(caplog)
+    assert "http=None" in line and "transport_error=ReadTimeout" in line

@@ -39,12 +39,12 @@ class JobRunner:
         # Created unbound; asyncio binds it to the server's loop on first wait.
         self._slots = asyncio.Semaphore(max_concurrent_jobs)
 
-    async def submit(self, job: Job, stored: Path) -> None:
-        """Wait for a free slot, then run the job in the thread pool."""
+    async def submit(self, job: Job, stored: list[Path]) -> None:
+        """Wait for a free slot, then run the job (its ``stored`` files, in order) in the thread pool."""
         async with self._slots:
             await run_in_threadpool(self.run, job, stored)
 
-    def run(self, job: Job, stored: Path) -> None:
+    def run(self, job: Job, stored: list[Path]) -> None:
         """Run one job now and persist its start, progress and outcome."""
         # The orchestrator changes ``job`` in place.
         job.status = JobStatus.RUNNING
@@ -53,7 +53,7 @@ class JobRunner:
             logger.info("job %s was deleted before it started", job.id)
             return
         try:
-            self._pipeline.run(job, [stored], on_progress=self._jobs.update)
+            self._pipeline.run(job, stored, on_progress=self._jobs.update)
         except Exception as exc:  # recorded on the job (status, error type); the server keeps serving
             if job.status is not JobStatus.FAILED:
                 job.status, job.error = JobStatus.FAILED, type(exc).__name__

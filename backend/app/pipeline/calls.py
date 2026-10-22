@@ -26,6 +26,7 @@ from tenacity import (
 
 from app.config import ExtractionSettings
 from app.providers.base import RetryableProviderError
+from app.providers.diagnostics import exception_chain
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,8 @@ RETRYABLE_ERRORS = (RetryableProviderError, TimeoutError)
 
 def _log_retry(state: RetryCallState) -> None:
     error = state.outcome.exception() if state.outcome else None
-    logger.warning("provider call attempt %d failed (%s), retrying", state.attempt_number, type(error).__name__)
+    logger.warning("provider call attempt %d failed (%s), retrying", state.attempt_number,
+                   exception_chain(error) if error else None)
 
 
 class ProviderCalls:

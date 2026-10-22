@@ -168,7 +168,7 @@ def test_job_survives_app_restart(tmp_path, monkeypatch):
         pdf = doc.tobytes()
 
     with TestClient(create_app(Settings(), FakeProvider())) as first:
-        job_id = first.post("/jobs", files={"file": ("form.pdf", pdf, "application/pdf")}).json()["id"]
+        job_id = first.post("/jobs", files={"files": ("form.pdf", pdf, "application/pdf")}).json()["id"]
         before = first.get(f"/jobs/{job_id}").json()
     assert (tmp_path / "app.db").is_file()
 
