@@ -1,0 +1,11 @@
+{
+  "_comment": "Dummy samples for the demo lab connector (app/lab_system/demo.py); no real data. 123456 matches the fake provider's default reading; 0234567, 0234568 and 345678 match the other dummy forms of scripts/make_sample_output.py (345678 with a received date that differs from the form's); 456789 and 567890 have no commitment.",
+  "samples": [
+    {"central_number": "123456", "received_date": "2025-01-01", "sender": "כללית"},
+    {"central_number": "0234567", "received_date": "2025-03-09", "sender": "כללית"},
+    {"central_number": "0234568", "received_date": "2025-03-09", "sender": "כללית"},
+    {"central_number": "345678", "received_date": "2025-01-02", "sender": "כללית"},
+    {"central_number": "456789", "received_date": "2025-01-01", "sender": "מכבי"},
+    {"central_number": "567890", "received_date": "2025-01-02", "sender": "המרכז הרפואי שערי צדק"}
+  ]
+}

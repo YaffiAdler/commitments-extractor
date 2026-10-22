@@ -13,6 +13,7 @@ const DETAIL_TEXT: Record<string, string> = {
   'a date must be YYYY-MM-DD': 'תאריך לא תקין',
   'sender must be a canonical name from the closed list': 'יש לבחור גורם שולח מהרשימה',
   'job store unavailable': 'מאגר הנתונים אינו זמין כרגע',
+  'lab system unavailable': 'מערכת המעבדה אינה זמינה כרגע',
   'too many pages': 'יותר מדי עמודים בהעלאה אחת',
   'request too large': 'ההעלאה גדולה מהמותר',
   'access token missing or invalid': 'קוד הגישה חסר או שגוי',

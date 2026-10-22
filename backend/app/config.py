@@ -32,6 +32,12 @@ class ProviderName(str, Enum):
     FAKE = "fake"  # fixed dummy data, for tests and offline demos
 
 
+class LabConnectorName(str, Enum):
+    """Available lab system connectors (see ``app/lab_system``)."""
+
+    DEMO = "demo"  # dummy samples from a JSON file, no real connection
+
+
 class StorageName(str, Enum):
     """Available job stores (see ``app/storage``). Without ``CE_STORAGE`` the
     store is ``postgres`` when ``DATABASE_URL`` is set, else ``sqlite``."""
@@ -305,6 +311,14 @@ class Settings:
     ocr_languages: str = field(default_factory=lambda: _env("ocr_languages", "heb+eng"))
     ocr_timeout_s: float = field(default_factory=lambda: float(_env("ocr_timeout_s", "30")))
 
+    # The lab system the job is checked against (``GET /jobs/{id}/lab-match``); only a demo exists.
+    lab_connector: LabConnectorName = field(
+        default_factory=lambda: LabConnectorName(_env("lab_connector", LabConnectorName.DEMO.value)))
+    lab_demo_samples_path: Path = field(default_factory=lambda: Path(
+        _env("lab_demo_samples_path", str(BACKEND_DIR / "data" / "demo_lab_samples.json"))))
+    # Samples are queried from the job's earliest to its latest received date, widened by this many days.
+    lab_match_margin_days: int = field(default_factory=lambda: int(_env("lab_match_margin_days", "7")))
+
     def __post_init__(self) -> None:
         if self.render_dpi <= 0:
             raise ValueError("render_dpi must be positive")
@@ -320,6 +334,8 @@ class Settings:
             raise ValueError("review_threshold must be between 0 and 1")
         if self.segment.vlm >= self.review_threshold:
             raise ValueError("segment weight vlm must stay below review_threshold")
+        if self.lab_match_margin_days < 0:
+            raise ValueError("lab_match_margin_days must not be negative")
         if self.log_level not in LOG_LEVELS:
             raise ValueError(f"log_level must be one of {', '.join(LOG_LEVELS)}")
         self._check_demo_protection()

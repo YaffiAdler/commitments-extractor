@@ -1025,3 +1025,35 @@ body {
   border-color: var(--teal);
   box-shadow: 0 0 0 3px rgb(17 163 168 / 0.2);
 }
+
+/* Check against the lab system (demo connector only, so the label must stand out). */
+.lab-match {
+  margin-top: 1rem;
+}
+
+.lab-demo-label {
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: var(--review-strong);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.lab-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.lab-groups h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+}
+
+.lab-list {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  font-size: 0.9rem;
+}

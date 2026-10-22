@@ -178,6 +178,39 @@ export async function correctField(
   return response.json()
 }
 
+// Mirrors backend/app/lab_system (base.py, matching.py). Dates are YYYY-MM-DD.
+export interface ReceivedSample {
+  central_number: string
+  received_date: string
+  sender: string
+}
+
+export interface MatchedSample {
+  commitment_id: string
+  central_number: string
+  sample: ReceivedSample
+  commitment_received_date: string | null
+  // null when the form's received date was not read.
+  date_differs: boolean | null
+}
+
+export interface CommitmentWithoutSample {
+  commitment_id: string
+  // null when no central number was read on the form.
+  central_number: string | null
+}
+
+export interface LabMatch {
+  matched: MatchedSample[]
+  samples_without_commitment: ReceivedSample[]
+  commitments_without_sample: CommitmentWithoutSample[]
+}
+
+// The job's commitments checked against the lab system's samples by central number (read-only).
+export async function getLabMatch(jobId: string): Promise<LabMatch> {
+  return (await request(`/jobs/${jobId}/lab-match`)).json()
+}
+
 // Detail of the image endpoints' 404 once the page image was deleted (file TTL or a server restart).
 export const IMAGE_GONE = 'image_gone'
 export const NO_BOX = 'no_box'

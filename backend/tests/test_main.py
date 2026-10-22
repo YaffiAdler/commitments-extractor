@@ -605,3 +605,19 @@ def test_store_failure_is_503_and_logs_the_type_only(client, monkeypatch, caplog
         response = client.get(f"/jobs/{job_id}")
     assert (response.status_code, response.json()["detail"]) == (503, "job store unavailable")
     assert [r.getMessage() for r in caplog.records if r.name == "app.main"] == ["job store failed: OperationalError"]
+
+
+def test_lab_match_with_fake_provider_and_demo_lab(client, caplog):
+    job_id = _done_job_id(client)
+    with caplog.at_level(logging.INFO):
+        response = client.get(f"/jobs/{job_id}/lab-match")
+    assert response.status_code == 200
+    result = response.json()
+    group_id = client.get(f"/jobs/{job_id}").json()["groups"][0]["id"]
+    assert [(m["commitment_id"], m["central_number"], m["date_differs"]) for m in result["matched"]] == [
+        (group_id, fake.FAKE_CENTRAL_NUMBER, False)]
+    # Only samples near the job's received date (01.01.2025) are asked for; the March ones are out of range.
+    assert sorted(s["central_number"] for s in result["samples_without_commitment"]) == ["345678", "456789", "567890"]
+    assert result["commitments_without_sample"] == []
+    assert fake.FAKE_CENTRAL_NUMBER not in caplog.text  # counts only in the log
+    assert client.get(f"/jobs/{'0' * 32}/lab-match").status_code == 404

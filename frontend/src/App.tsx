@@ -3,6 +3,7 @@ import { type FormGroup, type Job, type JobProgress, deleteJob, exportJob, getJo
 import { ExportButton } from './components/ExportButton'
 import { FieldPanel } from './components/FieldPanel'
 import { Icon } from './components/Icon'
+import { LabMatchCard } from './components/LabMatchCard'
 import { ReviewTable } from './components/ReviewTable'
 import { UploadPanel } from './components/UploadPanel'
 import { failureText } from './messages'
@@ -241,6 +242,10 @@ function App() {
             onlyUncertain={onlyUncertain}
             onOnlyUncertainChange={setOnlyUncertain}
           />
+        )}
+
+        {job && rows.length > 0 && (
+          <LabMatchCard key={job.id} jobId={job.id} groups={rows} disabled={job.status !== 'done'} />
         )}
 
         {job && job.irrelevant_pages.length > 0 && (

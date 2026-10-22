@@ -24,6 +24,9 @@ from app.corrections import CorrectionError, apply_correction
 from app.events import stream_job_events
 from app.export.xlsx import write_xlsx
 from app.field_crops import CropUnavailableError, field_crop_png, form_page_jpeg
+from app.lab_system import create_lab_connector
+from app.lab_system.base import LabSystemConnector, LabSystemError
+from app.lab_system.matching import LabMatch, match_samples, query_range
 from app.ocr import create_ocr_engine
 from app.log_filters import install_token_redaction
 from app.pipeline.ingest import (BYTES_PER_MB, FILE_SUFFIXES, MAGIC_BYTES_NEEDED, FileTooLargeError, IngestError,
@@ -63,6 +66,7 @@ JPEG_MEDIA_TYPE = "image/jpeg"
 CROP_HEADERS = {"Cache-Control": "no-store"}
 STORE_ERROR_DETAIL = "job store unavailable"
 TOO_MANY_PAGES_DETAIL = "too many pages"
+LAB_SYSTEM_ERROR_DETAIL = "lab system unavailable"
 
 
 class FieldCorrectionRequest(BaseModel):
@@ -119,7 +123,8 @@ async def purge_periodically(jobs: JobStore, interval_s: float) -> None:
             logger.error("periodic purge failed: %s", type(exc).__name__)
 
 
-def create_app(settings: Settings | None = None, provider: ExtractionProvider | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, provider: ExtractionProvider | None = None,
+               lab_connector: LabSystemConnector | None = None) -> FastAPI:
     settings = settings or Settings()
     configure_process(settings)
     storage = TempStorage(settings.tmp_dir)
@@ -137,6 +142,7 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
         page_images=page_images,
     )
     runner = JobRunner(jobs, orchestrator, settings.max_concurrent_jobs)
+    lab_connector = lab_connector or create_lab_connector(settings)
 
     def clear_files() -> None:
         if settings.clear_tmp_on_restart:
@@ -266,6 +272,26 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
             raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
         logger.info("job %s form %s: field %s corrected", job.id, commitment_id, field)
         return job
+
+    @app.get("/jobs/{job_id}/lab-match")
+    def lab_match(job_id: str) -> LabMatch:
+        """The job's commitments checked against the lab system's received samples by central number
+        (see ``app/lab_system/matching.py``); only on a finished job. Read-only: no field changes."""
+        job = require_job(job_id)
+        if job.status is not JobStatus.DONE:
+            raise HTTPException(status.HTTP_409_CONFLICT, "job is not finished")
+        commitments = {group.id: group.commitment for group in job.groups}
+        date_from, date_to = query_range(commitments.values(), settings.lab_match_margin_days)
+        try:
+            samples = lab_connector.get_received_samples(date_from, date_to)
+        except LabSystemError as exc:
+            logger.error("lab system failed: %s", exc)
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, LAB_SYSTEM_ERROR_DETAIL) from None
+        result = match_samples(commitments, samples)
+        logger.info("job %s lab match: %d matched, %d samples without commitment, %d commitments without sample",
+                    job.id, len(result.matched), len(result.samples_without_commitment),
+                    len(result.commitments_without_sample))
+        return result
 
     @app.get("/jobs/{job_id}/crop/{commitment_id}/{field}")
     def field_crop(job_id: str, commitment_id: str, field: str, item: int | None = None) -> Response:

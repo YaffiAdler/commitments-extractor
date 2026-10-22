@@ -108,6 +108,7 @@ docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up --build
 | GET | `/jobs/{id}/events` | `text/event-stream`: `progress` (`status`, `forms_total`, `forms_done`), `rows` (newly finished groups, each once), `end` (the whole job, then the stream closes), `missing` (job gone); 404 if unknown |
 | POST | `/jobs/{id}/export` | the xlsx file (409 if the job is not `done`) |
 | PATCH | `/jobs/{id}/commitments/{cid}/fields/{field}` | `cid` = the form's id (`FormGroup.id`). JSON `{"value": "...", "item": n}`: a reviewer's value (`source=manual`, `needs_review=false`, `raw_value` keeps the text as read); `item` only for `central_numbers` / `commitment_numbers` (an index, or the list length to add one); dates as `YYYY-MM-DD`; the sender must be a canonical name. 409 if the job is not `done`, 422 for an invalid value; returns the job |
+| GET | `/jobs/{id}/lab-match` | **demo only** (dummy lab data): the job's commitments checked against the samples the lab system received, by central number only. JSON `matched` (`commitment_id`, `central_number`, `sample`, `date_differs`), `samples_without_commitment`, `commitments_without_sample` (`central_number` null when none was read). Read-only, changes no field. 409 if the job is not `done`, 503 `lab system unavailable` |
 | GET | `/jobs/{id}/crop/{cid}/{field}` | PNG of the field's box (`?item=n` for list fields), cut on request, never written to disk. 404 with `detail`: `image_gone` (the page image was deleted: file TTL or server restart), `no_box`, `field_not_found` |
 | GET | `/jobs/{id}/pages/{cid}/{page}` | JPEG of one page of the form (`page` 0-based in the source file, one of `FormGroup.pages`), at the resolution of `Field.bbox`. 404 `page_not_in_form` / `image_gone` |
 | DELETE | `/jobs/{id}` | deletes the job's rows in every table and its files (upload, page images, export) |
@@ -165,6 +166,9 @@ With `CE_DEMO_ACCESS_TOKEN` set, every endpoint but `/health` answers 401 `acces
 | `CE_TESSERACT_CMD` | — | path to `tesseract`; empty = find on PATH |
 | `CE_OCR_LANGUAGES` | `heb+eng` | languages that are not installed are dropped |
 | `CE_OCR_TIMEOUT_S` | `30` | per Tesseract call |
+| `CE_LAB_CONNECTOR` | `demo` | lab system for `GET /jobs/{id}/lab-match`; only `demo` exists (dummy data, no real connection) |
+| `CE_LAB_DEMO_SAMPLES_PATH` | `backend/data/demo_lab_samples.json` | the demo connector's dummy samples |
+| `CE_LAB_MATCH_MARGIN_DAYS` | `7` | samples are asked for from the job's earliest to latest received date, widened by this; all dates when none was read |
 | `TESSDATA_PREFIX` | — | Tesseract's own variable: folder with the `heb`/`eng`/`osd` `.traineddata` files. On Windows it must be an ASCII path (see 31) |
 | `CE_PREPROCESS_PERSPECTIVE` | `1` | every preprocessing step can be switched off with `0` |
 | `CE_PREPROCESS_DESKEW` | `1` | |
@@ -511,6 +515,18 @@ With `CE_DEMO_ACCESS_TOKEN` set, every endpoint but `/health` answers 401 `acces
 - `ingest.count_pages(data, kind)`; `TempStorage.clear()`.
 - API: 401 / 429 / 411 and 413 `too many pages` / `request too large` as above; CORS allows the `Authorization` header.
 - Frontend: `api.checkAccess(token)`, and every call sends the stored code; new `access.ts`, `AccessGate`, `DemoBanner`; `vite build` requires `VITE_API_URL`; new `npm run e2e:demo` (`playwright.demo.config.ts`, `e2e/demo.spec.ts`), which the default `npm run e2e` ignores.
+
+## Assumptions (lab system check — demo only)
+117. **Simulated connection; for a real connection implement `LabSystemConnector` against the lab system.** `app/lab_system/base.py` defines the Protocol (`get_received_samples(date_from, date_to) -> list[ReceivedSample]`, each with `central_number`, `received_date`, `sender`) and `LabSystemError`; `demo.DemoLabConnector` reads dummy samples from `backend/data/demo_lab_samples.json` on every call. `create_lab_connector(settings)` picks it from `CE_LAB_CONNECTOR`. The demo file partly matches the fake provider: `123456` (the default reading) matches; `0234567`, `0234568` and `345678` match the other dummy forms of `scripts/make_sample_output.py` (`345678` with a different received date); `456789` and `567890` have no commitment.
+118. **Matching by central number only** (`matching.match_samples`, pure): exact strings (leading zeros matter), every central number of a form checked, identical repeats once. Nothing is guessed: a form with no central number read is listed under "commitment without sample" with `central_number` null. The received dates are compared for the reviewer (`date_differs`, null if the form's date was not read) but never decide a match. No field, reason or review flag is changed, and nothing is stored.
+119. **Screen:** after a job finishes, "בדיקה מול מערכת המעבדה" fetches the match on request and shows a card with three counters and up to 5 items per group, labelled "מצב הדגמה: נתונים מדומים". The result is not refreshed after a correction; pressing the button again does.
+
+### Lab system check — what was checked
+- `tests/test_lab_matching.py` (three groups, leading zeros, a different date, unread central number / date, several stickers, the query range), `tests/test_lab_demo.py` (the demo file, date filter, unreadable file), and an API test in `test_main.py` with the fake provider (every store). Frontend: `LabMatchCard.test.tsx`.
+
+### Lab system check changes to existing interfaces
+- `main.create_app(settings, provider, lab_connector=None)`: new optional argument. `Settings`: new `lab_connector`, `lab_demo_samples_path`, `lab_match_margin_days`; new `config.LabConnectorName`.
+- New package `app/lab_system/`; new endpoint `GET /jobs/{id}/lab-match`. Frontend: `api.getLabMatch`, `components/LabMatchCard.tsx`.
 
 ## Storage
 - **Interface:** `app/storage/base.py` defines the `JobStore` Protocol (`init`, `close`, `create`, `get`, `update`, `delete`, `list_commitments`, `fail_interrupted`, `purge_expired`); `create_job_store(settings, tmp)` builds `PostgresJobStore` (`storage/postgres.py`), `SqliteJobStore` (`storage/sqlite.py`) or `MemoryJobStore` (`storage/memory.py`). Both SQL stores share all queries (`storage/sql.py`); they differ only in the connection (SQLite: one per operation; Postgres: a `psycopg_pool` pool) and the migration lock.
