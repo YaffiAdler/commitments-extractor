@@ -46,6 +46,12 @@ def crop_field(bbox: BBox, pages: list[PageImage], for_ocr: bool) -> np.ndarray 
         image = page.ocr_image if page.ocr_image is not None else to_gray(page.original)
     else:
         image = page.original
+    return crop_bbox(image, bbox)
+
+
+def crop_bbox(image: np.ndarray, bbox: BBox) -> np.ndarray | None:
+    """``bbox`` plus ``CROP_PADDING_PX`` from ``image`` (in ``original``
+    coordinates); None if the crop is outside the image or too small to read."""
     try:
         crop = crop_box(image, bbox.x0, bbox.y0, bbox.x1, bbox.y1, CROP_PADDING_PX)
     except ValueError:

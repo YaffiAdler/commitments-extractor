@@ -45,3 +45,4 @@ class FormReader:
         normalized = normalize.normalize(commitment, found.form_type, self._today())
         group.commitment = confidence.score_fields(normalized, found.form_type, self._confidence)
         group.form_reasons.extend(found.form_reasons)
+        group.classification = found.result()

@@ -8,6 +8,7 @@ import {
   SPLIT_UNCERTAIN,
   deleteJob,
   exportJob,
+  getCrop,
   getJob,
   streamJob,
   uploadFile,
@@ -46,6 +47,15 @@ function cell(value: Field | Field[], optional: boolean): { text: string; review
 }
 
 const SPLIT_UNCERTAIN_TEXT = 'ייתכן שפוצל לא נכון'
+const IMAGE_GONE_TEXT = 'התמונה כבר לא זמינה'
+
+// Values of a cell that have a box on the page; item is the list index (null for a single field).
+function boxedItems(value: Field | Field[]): (number | null)[] {
+  if (Array.isArray(value)) return value.flatMap((f, i) => (f.bbox ? [i] : []))
+  return value.bbox ? [null] : []
+}
+
+type Preview = { title: string; url: string | null }
 
 // Pages are 0-based in the API and 1-based for the reader.
 const pageNumbers = (pages: number[]) => pages.map((p) => p + 1).join(', ')
@@ -74,6 +84,26 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<JobProgress | null>(null)
+  // url null: the page image is gone (file TTL or server restart).
+  const [preview, setPreview] = useState<Preview | null>(null)
+
+  function showPreview(next: Preview | null) {
+    setPreview((current) => {
+      if (current?.url) URL.revokeObjectURL(current.url)
+      return next
+    })
+  }
+
+  async function handleCrop(group: FormGroup, key: string, header: string, item: number | null) {
+    if (!job) return
+    const title = item === null ? header : `${header} ${item + 1}`
+    try {
+      const crop = await getCrop(job.id, group.id, key, item)
+      showPreview({ title, url: crop.kind === 'image' ? URL.createObjectURL(crop.blob) : null })
+    } catch (e) {
+      setError(`טעינת התמונה נכשלה (${(e as Error).message})`)
+    }
+  }
 
   async function pollJob(jobId: string) {
     let current = await getJob(jobId)
@@ -108,6 +138,7 @@ function App() {
     setError(null)
     setBusy(true)
     setProgress(null)
+    showPreview(null)
     try {
       if (job) await deleteJob(job.id)
       const created = await uploadFile(file)
@@ -184,13 +215,21 @@ function App() {
             {rows.map((group) => (
               <tr key={group.id}>
                 {COLUMNS.map((c) => {
-                  const { text, review } = cell(
-                    group.commitment[c.key] as Field | Field[],
-                    group.commitment.optional_fields.includes(c.key),
-                  )
+                  const value = group.commitment[c.key] as Field | Field[]
+                  const { text, review } = cell(value, group.commitment.optional_fields.includes(c.key))
                   return (
                     <td key={c.key} className={review ? 'review' : undefined}>
                       {text}
+                      {boxedItems(value).map((item) => (
+                        <button
+                          type="button"
+                          className="crop-link"
+                          key={item ?? 'single'}
+                          onClick={() => void handleCrop(group, c.key, c.header, item)}
+                        >
+                          {item === null ? 'תמונה' : `תמונה ${item + 1}`}
+                        </button>
+                      ))}
                     </td>
                   )
                 })}
@@ -202,6 +241,16 @@ function App() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {preview && (
+        <section className="preview">
+          <strong>{preview.title}</strong>
+          {preview.url ? <img src={preview.url} alt={preview.title} /> : <p className="review-note">{IMAGE_GONE_TEXT}</p>}
+          <button type="button" onClick={() => showPreview(null)}>
+            סגירה
+          </button>
+        </section>
       )}
 
       {job && job.irrelevant_pages.length > 0 && (

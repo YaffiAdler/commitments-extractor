@@ -1,6 +1,14 @@
 import pytest
 
-from app.config import DEFAULT_EXPORT_COLUMNS, ConfidenceSettings, MultiValueMode, ProviderName, SegmentSettings, Settings
+from app.config import (
+    DEFAULT_EXPORT_COLUMNS,
+    ConfidenceSettings,
+    MultiValueMode,
+    ProviderName,
+    SegmentSettings,
+    Settings,
+    StorageName,
+)
 
 
 def test_defaults_are_valid():
@@ -136,6 +144,40 @@ def test_export_settings_from_env(monkeypatch):
 @pytest.mark.parametrize("name, value", [("CE_EXPORT_COLUMNS", "id_number,unknown"),
                                          ("CE_EXPORT_MULTI_VALUES", "rows")])
 def test_invalid_export_settings_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError):
+        Settings()
+
+
+def test_storage_is_sqlite_without_database_url(monkeypatch):
+    monkeypatch.delenv("CE_STORAGE")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert Settings().storage is StorageName.SQLITE
+
+
+def test_storage_is_postgres_with_database_url(monkeypatch):
+    monkeypatch.delenv("CE_STORAGE")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://ce:dummy-secret@db.example.org/ce")
+    settings = Settings()
+    assert settings.storage is StorageName.POSTGRES
+    assert "dummy-secret" not in repr(settings)
+
+
+def test_ce_storage_overrides_database_url(monkeypatch):
+    monkeypatch.setenv("CE_STORAGE", "memory")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://ce@db.example.org/ce")
+    assert Settings().storage is StorageName.MEMORY
+
+
+def test_postgres_without_database_url_is_rejected(monkeypatch):
+    monkeypatch.setenv("CE_STORAGE", "postgres")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(ValueError):
+        Settings()
+
+
+@pytest.mark.parametrize(("name", "value"), [("CE_FILE_TTL_S", "0"), ("CE_DB_POOL_SIZE", "0"), ("CE_DB_TIMEOUT_S", "0")])
+def test_invalid_storage_limits_rejected(monkeypatch, name, value):
     monkeypatch.setenv(name, value)
     with pytest.raises(ValueError):
         Settings()

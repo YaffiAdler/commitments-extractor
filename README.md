@@ -21,10 +21,10 @@ backend/app/ocr/              OcrEngine Protocol (base.py) + Tesseract
 backend/app/providers/        ExtractionProvider Protocol (base.py) + claude / gemini / local_vlm / fake (shared schema/parsing in common.py, prompt files in prompts.py)
 backend/prompts/              versioned prompt files: extract_v1.md (template + YAML block), read_number_v1.md
 backend/app/export/xlsx.py    Excel export (columns and multi-value mode from config.ExportSettings)
-backend/app/storage/          JobStore Protocol (base.py) + sqlite / memory job stores, tmp.py: temporary per-job files
+backend/app/storage/          JobStore Protocol (base.py) + memory / sqlite / postgres job stores (sql.py: shared SQL), tmp.py: temporary per-job files, page_images.py: page images for crops
 backend/form_types/*.yaml     one definition per observed form type (25 types) + generic.yaml (fallback)
 backend/data/senders.json     closed list of senders
-backend/data/schema.sql       SQLite job store schema
+backend/data/migrations/      job store schema as numbered migrations (SQLite and Postgres)
 backend/tests/                pytest
 frontend/                     React + Vite + TypeScript
 eval/                         ground_truth.csv, run_eval.py -> report.md
@@ -49,7 +49,13 @@ py -3.11 -m venv .venv
 SETUPTOOLS_USE_DISTUTILS=stdlib .venv/Scripts/python -m pip install -c backend/requirements.lock -e "backend[dev]"
 .venv/Scripts/python scripts/lock_requirements.py                    # after a dependency change: rewrite the lock
 cd backend && ../.venv/Scripts/python -m pytest
-cd backend && ../.venv/Scripts/uvicorn app.main:app --reload          # http://localhost:8000
+cd backend && ../.venv/Scripts/uvicorn app.main:app --reload          # http://localhost:8000 (jobs in backend/data/app.db)
+
+# job store: SQLite by default; Postgres when DATABASE_URL is set; CE_STORAGE overrides both
+DATABASE_URL=postgresql://<user>:<password>@localhost:5432/<db> ../.venv/Scripts/uvicorn app.main:app --reload  # from backend/
+CE_STORAGE=memory ../.venv/Scripts/uvicorn app.main:app --reload      # nothing on disk, lost on restart
+# run the store tests against Postgres too (each test gets its own schema; skipped when unset)
+cd backend && TEST_DATABASE_URL=postgresql://<user>:<password>@localhost:5432/<db> ../.venv/Scripts/python -m pytest
 
 # run without an API key (fixed dummy data):
 CE_PROVIDER=fake ../.venv/Scripts/uvicorn app.main:app --reload       # from backend/
@@ -62,7 +68,7 @@ CE_PROVIDER=gemini GEMINI_API_KEY=... ../.venv/Scripts/uvicorn app.main:app --re
 cd frontend && npm ci && npm run dev                                  # http://localhost:5173
 # deployed frontend: VITE_API_URL=<backend URL> at build time (see frontend/.env.example)
 
-# both in Docker (jobs in memory)
+# both in Docker (jobs in memory: CE_STORAGE=memory in docker-compose.yml)
 docker compose up --build
 # local only: keep jobs in SQLite across restarts (volume job-db)
 docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up --build
@@ -84,7 +90,9 @@ Fields that need review are highlighted (in the table and in the Excel file).
 | GET | `/jobs/{id}` | job status and extracted groups (while running: all groups found so far, `finished` marks the read ones) |
 | GET | `/jobs/{id}/events` | `text/event-stream`: `progress` (`status`, `forms_total`, `forms_done`), `rows` (newly finished groups, each once), `end` (the whole job, then the stream closes), `missing` (job gone); 404 if unknown |
 | POST | `/jobs/{id}/export` | the xlsx file (409 if the job is not `done`) |
-| DELETE | `/jobs/{id}` | deletes the job and its files |
+| PATCH | `/jobs/{id}/groups/{group}/fields/{field}` | JSON `{"value": "...", "item": n}`: a reviewer's value (`source=manual`, no review flag); `item` only for `central_numbers` / `commitment_numbers` (an index, or the list length to add one); dates as `YYYY-MM-DD`; the sender must be a canonical name. 409 if the job is not `done`, 422 for an invalid value; returns the job |
+| GET | `/jobs/{id}/groups/{group}/fields/{field}/crop` | PNG of the field's box (`?item=n` for list fields). 404 with `detail`: `image_gone` (the page image was deleted: file TTL or server restart), `no_box`, `field_not_found` |
+| DELETE | `/jobs/{id}` | deletes the job's rows in every table and its files |
 
 ### Settings (env vars)
 | Variable | Default | |
@@ -106,9 +114,13 @@ Fields that need review are highlighted (in the table and in the Excel file).
 | `CE_EXTRACT_MAX_ATTEMPTS` | `3` | per call, for timeouts / rate limits / overloads |
 | `CE_EXTRACT_BACKOFF_INITIAL_S` | `2` | exponential backoff (2, 4, 8 … s) plus up to this much jitter |
 | `CE_EXTRACT_BACKOFF_MAX_S` | `30` | |
-| `CE_STORAGE` | `memory` | `memory` (no state on disk, lost on restart) / `sqlite` (local use only, survives restarts) |
-| `CE_DB_PATH` | `backend/data/app.db` | SQLite file, only with `CE_STORAGE=sqlite`; created at startup |
-| `CE_JOB_TTL_S` | `3600` | jobs and their files are deleted after this (both stores) |
+| `CE_STORAGE` | — | override of the job store: `memory` (nothing on disk, lost on restart) / `sqlite` / `postgres`. Unset: `postgres` if `DATABASE_URL` is set, else `sqlite` |
+| `DATABASE_URL` | — | Postgres connection URL (no `CE_` prefix: Render sets this name). Holds the password: never logged |
+| `CE_DB_PATH` | `backend/data/app.db` | SQLite file; created at startup |
+| `CE_DB_POOL_SIZE` | `5` | Postgres: connections kept open at most |
+| `CE_DB_TIMEOUT_S` | `10` | Postgres: seconds to wait for a connection |
+| `CE_JOB_TTL_S` | `3600` | jobs (database rows) are deleted this long after creation, with their files |
+| `CE_FILE_TTL_S` | `3600` | temporary files (upload, page images, export) are deleted this long after the job directory was last written, even if the job stays |
 | `CE_MAX_UPLOAD_MB` | `50` | |
 | `CE_MAX_IMAGE_PIXELS` | `50000000` | per page image (width × height), checked before decoding / rendering; also set as Pillow's `Image.MAX_IMAGE_PIXELS` |
 | `CE_MAX_CONCURRENT_JOBS` | `2` | jobs processed at once; further uploads wait as `pending` |
@@ -356,7 +368,7 @@ Fields that need review are highlighted (in the table and in the Excel file).
 - `pipeline/reason_texts.py`: new `FORM_REASON_TEXTS`.
 
 ## Assumptions (deployment fixes — sync report)
-71. **Jobs are kept in memory by default** (`CE_STORAGE=memory`), because the deployment guidelines allow no persistent state on disk and Render's disk is ephemeral anyway. `sqlite` stays for local use only; `docker-compose.yml` no longer mounts the `job-db` volume, and `docker-compose.sqlite.yml` adds it back on request. Supersedes 24.
+71. *(Default superseded by 90.)* **Jobs are kept in memory by default** (`CE_STORAGE=memory`), because the deployment guidelines allow no persistent state on disk and Render's disk is ephemeral anyway. `sqlite` stays for local use only; `docker-compose.yml` no longer mounts the `job-db` volume, and `docker-compose.sqlite.yml` adds it back on request. Supersedes 24.
 72. **The container listens on `0.0.0.0:${PORT:-8000}`** (`backend/Dockerfile`), so Render can assign the port. `PORT` is the only variable read without the `CE_` prefix; the `CE_` prefix on all other settings is deliberate (`CE_TMP_DIR`, `CE_TESSERACT_CMD`, `CE_ALLOWED_ORIGINS`, ...).
 73. **CORS is off unless `CE_ALLOWED_ORIGINS` is set.** Then `CORSMiddleware` allows exactly those origins, methods `GET`/`POST`/`DELETE`, no credentials. An origin not in the list gets no CORS headers (the browser blocks it) and its preflight gets 400. Same-origin use (the Vite proxy, docker compose) needs nothing.
 74. **Frontend API base from `VITE_API_URL`** (build time, `frontend/.env.example`), default `/api` (the Vite dev proxy). On Vercel set it to the backend root URL (the backend has no `/api` prefix) and add the Vercel origin to the backend's `CE_ALLOWED_ORIGINS`. An empty value also falls back to `/api`; a trailing slash is dropped. `frontend/vercel.json` builds with Vite and rewrites every path to `index.html` (SPA fallback). `.gitignore` keeps `.env.*` ignored except `.env.example`.
@@ -386,15 +398,40 @@ Fields that need review are highlighted (in the table and in the Excel file).
 - `segment`: the `WEIGHT_*` constants are gone; `rule_evidence`, `add_vlm_answer` and `decide_boundary` take a `SegmentSettings`; `segment(..., threshold, weights=None)` (None = `SegmentSettings()` from env).
 - Frontend `api.ts`: `FormGroup.finished`, `JobProgress`, `streamJob(jobId, handlers)`.
 
+## Assumptions (job data in the database — SQLite / Postgres)
+90. **Store selection:** `CE_STORAGE` when set (`memory` / `sqlite` / `postgres`); otherwise `postgres` if `DATABASE_URL` is set, else `sqlite`. This replaces the `memory` default of 71: without any setting, jobs now go to `backend/data/app.db`. `docker-compose.yml` still sets `memory`; on Render, `DATABASE_URL` makes it Postgres. **Deviation from the deployment guideline "no persistent state on disk"** — only for the local default without `DATABASE_URL`; the deployment keeps its state in Postgres, not on the container disk. `DATABASE_URL` is read without the `CE_` prefix (as Render names it) and left out of `Settings`' repr.
+91. **One schema, versioned migrations** (`backend/data/migrations`, see Storage). The full `FormGroup` stays one JSON column (`commitments.data_json`) rather than one row per field: it round-trips every field exactly, including signals and boxes, and new model fields need no migration. Only filter fields are columns.
+92. **Kept now that was dropped before:** the classification of each form (`FormGroup.classification`: form type, `known`, sender as read, match status, best score and up to 3 candidates; before, score and candidates were lost for a matched sender), the read time of each form (`FormGroup.read_ms`), the job's `started_at` / `finished_at`, and several files per job (`job_files`). The model's free-text `evidence` / page-pair `reason` are still not stored (they may quote the page).
+93. **Manual corrections** (`PATCH .../fields/{field}`, `app/corrections.py`): the value replaces `value` and `raw_value`, `source=manual`, confidence 1, `needs_review=false`, reasons `[manual_correction]` (text "הוזן ידנית על ידי בודק"); the box and earlier readings stay. Each correction is recorded in `Job.corrections` (`corrections` table) with the previous raw value and source. Only on a `done` job. Not re-run after a correction: normalization rules and the cross-form `central_duplicate` check (a form flagged so stays flagged). A value cannot be cleared through the API, and the UI has no editing yet.
+94. **Page images on disk, not in the database:** each preprocessed page is written as JPEG (quality 90, full resolution of `original`, the coordinates of `Field.bbox`) to `<CE_TMP_DIR>/<job>/pages/`. The crop is the box plus 10 px, cut on request as PNG with `Cache-Control: no-store`.
+95. **Separate file TTL** (`CE_FILE_TTL_S`, default 3600 like `CE_JOB_TTL_S`): a long database retention no longer keeps uploads and page images on disk as long.
+96. **Database errors are reported by type only** (`JobStoreError`, API 503); see Storage.
+97. **Postgres connections** come from a pool (`CE_DB_POOL_SIZE`, wait `CE_DB_TIMEOUT_S`), opened on first use and closed at shutdown (`JobStore.close`).
+98. **Tests on Postgres** run when `TEST_DATABASE_URL` is set: `conftest.pg_conninfo` creates a fresh schema per test (dropped afterwards), and the store contract (`test_job_stores.py`), the API tests (`test_main.py`, `test_e2e.py`) and `test_postgres_store.py` run against it. Without it they are skipped.
+
+### Job data in the database — changes to existing interfaces
+- Defaults: `Settings.storage` comes from `CE_STORAGE`, else `DATABASE_URL`, else `sqlite` (was `memory`). `StorageName.POSTGRES` is new.
+- `Settings`: new `database_url`, `db_pool_size`, `db_timeout_s`, `file_ttl_s`; `config.DATABASE_URL_ENV`.
+- `JobStore` Protocol: new `close()`. New `JobStoreError`. Store constructors take an optional `file_ttl_s`; new `PostgresJobStore(conninfo, storage, ttl_s, file_ttl_s=None, *, pool_size, timeout_s)`.
+- `app/storage/sqlite.py`: `init_db()`, `SCHEMA_PATH` and `ADDED_JOB_COLUMNS` are gone (now `SqlJobStore.init` and migrations); `backend/data/schema.sql` moved to `backend/data/migrations/0001_base.sql`. A job may now hold several files (was `ValueError`).
+- Schema (additive; defaults keep old JSON valid): `Job.started_at`, `Job.finished_at`, `Job.corrections: list[Correction]`, `Job.group(id)`; `FormGroup.classification: ClassificationResult | None`, `FormGroup.read_ms`; new `SenderCandidate`, `ClassificationResult`, `Correction`, `MANUAL_CORRECTION`.
+- `classify.Classification.result()`. `Orchestrator(..., page_images=None)`; `crops.crop_bbox(image, bbox)`.
+- API: new `PATCH /jobs/{id}/groups/{group}/fields/{field}` and `GET .../fields/{field}/crop`; CORS methods include `PATCH`; a database failure is 503. `app.state.jobs` exposes the store (tests).
+- Frontend `api.ts`: `Field.bbox`, `BBox`, `IMAGE_GONE`, `getCrop()`; the table has a "תמונה" button per value with a box.
+
 ## Storage
-- **Interface:** `app/storage/base.py` defines the `JobStore` Protocol (`init`, `create`, `get`, `update`, `delete`, `list_commitments`, `fail_interrupted`, `purge_expired`); `create_job_store(settings, tmp)` builds `SqliteJobStore` (`storage/sqlite.py`) or `MemoryJobStore` (`storage/memory.py`). The API endpoints did not change.
-- **Schema** (`backend/data/schema.sql`, applied by `init_db()` at FastAPI startup; idempotent, no migrations):
-  - `jobs(id, created_at, status, source_file, form_type, sender, error, needs_review, irrelevant_pages_json, split_vlm_calls)` — `form_type`/`sender` are set when all forms of the job share them; columns added after the first schema are added to an older database by `init_db()`.
-  - `commitments(id, job_id → jobs ON DELETE CASCADE, seq, data_json, needs_review)` — `data_json` is the whole `FormGroup` (pages, rotation and the full `Commitment` with every `Field`); only filter fields are columns.
-- Every connection sets `PRAGMA foreign_keys = ON`; deleting a job deletes its commitment rows and its temporary upload directory.
-- **No images** are stored in the database, and no field values are logged.
-- **Privacy:** the database holds patient data. `*.db` is git- and docker-ignored; it exists only with `CE_STORAGE=sqlite` (local use). In Docker that is the opt-in `docker-compose.sqlite.yml`, which keeps it in the `job-db` volume (`/var/lib/commitments-extractor/app.db`). Delete the file (or the volume) to wipe all jobs.
-- **Limits:** a job is saved when it is created, when it starts running and when it finishes. A job that was `pending` or `running` when the server stopped is not resumed: at startup it is marked `failed` with error `Interrupted`, and the file has to be uploaded again. Run a single server process per database (startup would fail the jobs of another running process). A job may hold one file only (the API uploads one per job); storing more raises `ValueError` instead of dropping files.
+- **Interface:** `app/storage/base.py` defines the `JobStore` Protocol (`init`, `close`, `create`, `get`, `update`, `delete`, `list_commitments`, `fail_interrupted`, `purge_expired`); `create_job_store(settings, tmp)` builds `PostgresJobStore` (`storage/postgres.py`), `SqliteJobStore` (`storage/sqlite.py`) or `MemoryJobStore` (`storage/memory.py`). Both SQL stores share all queries (`storage/sql.py`); they differ only in the connection (SQLite: one per operation; Postgres: a `psycopg_pool` pool) and the migration lock.
+- **Choosing the store:** `CE_STORAGE` if set; otherwise `postgres` when `DATABASE_URL` is set, else `sqlite` (`backend/data/app.db`). Local work with Postgres: set `DATABASE_URL` to a local database (see Running). Deployment: [docs/DEPLOY.md](docs/DEPLOY.md).
+- **Schema** (`backend/data/migrations/NNNN_name.sql`, portable SQL, the same in both databases). At startup `init()` applies the migrations a database has not seen yet, in one transaction under a lock (SQLite `BEGIN IMMEDIATE`, Postgres `pg_advisory_xact_lock`), and records each in `schema_version(version, applied_at)`. So startup is idempotent and safe with several processes, and a failed migration leaves nothing behind. Never edit a released migration; add the next one. A SQLite file from before versions (the old `schema.sql`) is migrated in place without losing jobs.
+  - `jobs(id, created_at, status, form_type, sender, error, needs_review, irrelevant_pages_json, split_vlm_calls, started_at, finished_at)` — `form_type`/`sender` are set when all forms of the job share them.
+  - `job_files(job_id, seq, stored_name)` — the generated names of the uploaded files (several per job are allowed now).
+  - `commitments(id, job_id, seq, data_json, needs_review)` — `data_json` is the whole `FormGroup`: pages, rotation, `split_confidence` and reasons, form reasons and error, classification (form type, sender as read, match status, score and candidates), provider calls and read time, and the full `Commitment` with every `Field` (value, raw_value, confidence, needs_review, reasons, explanations, source, bbox, signals).
+  - `corrections(job_id, seq, group_id, field, corrected_at, data_json)` — manual corrections, with the previous raw value and source.
+  - Every child table references `jobs ON DELETE CASCADE`, so `DELETE /jobs/{id}` removes all of a job's rows; it also deletes the job's temporary directory.
+- **Not in the database:** images. Uploads, page images (JPEG, for the crop endpoint) and exports live in the job's temporary directory (`CE_TMP_DIR`), deleted with the job or after `CE_FILE_TTL_S`. Crops are cut on request and never stored. When a page image is gone (TTL, or a restart on Render's ephemeral disk) the crop endpoint returns 404 `image_gone` and the UI shows "התמונה כבר לא זמינה"; the job's data stays.
+- **Errors:** a driver error becomes `JobStoreError` carrying the driver's exception type only (raised `from None`, so no message, value or query parameter reaches a log through the traceback); the API answers 503 `job store unavailable` and logs `job store failed: <type>`.
+- **Privacy:** the database holds patient data. `*.db` is git- and docker-ignored. With SQLite, delete the file (or the `job-db` volume of `docker-compose.sqlite.yml`) to wipe all jobs.
+- **Limits:** a job is saved when it is created, when it starts, after each segmented file and read form, and when it finishes. A job that was `pending` or `running` when the server stopped is not resumed: at startup it is marked `failed` with error `Interrupted` (its upload may be gone, e.g. on Render). Two reviewers correcting the same job at the same moment: the last write wins.
 
 ### Phase 2 changes to existing interfaces
 - `ingest.load_pages(pdf_path, dpi)` → `ingest.load_file(path, limits)`.

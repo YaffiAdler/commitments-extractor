@@ -1,7 +1,9 @@
 """Runtime settings: paths, extraction provider and review thresholds.
 
 Every value can be overridden by an environment variable of the same name in
-upper case with the ``CE_`` prefix, e.g. ``CE_PROVIDER=local_vlm``.
+upper case with the ``CE_`` prefix, e.g. ``CE_PROVIDER=local_vlm``. The
+exceptions are set by the host and read without a prefix: ``DATABASE_URL``
+(here) and ``PORT`` (the Docker image).
 """
 from __future__ import annotations
 
@@ -26,10 +28,16 @@ class ProviderName(str, Enum):
 
 
 class StorageName(str, Enum):
-    """Available job stores (see ``app/storage``)."""
+    """Available job stores (see ``app/storage``). Without ``CE_STORAGE`` the
+    store is ``postgres`` when ``DATABASE_URL`` is set, else ``sqlite``."""
 
-    MEMORY = "memory"  # default: no state on disk, lost on restart
-    SQLITE = "sqlite"  # local use only: survives a server restart
+    MEMORY = "memory"      # no state on disk, lost on restart (tests, docker compose)
+    SQLITE = "sqlite"      # local default: a file, survives a restart
+    POSTGRES = "postgres"  # deployment: the database at ``DATABASE_URL``
+
+
+# Read without the ``CE_`` prefix: hosts such as Render set this name.
+DATABASE_URL_ENV = "DATABASE_URL"
 
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -38,6 +46,13 @@ _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(ENV_PREFIX + name.upper(), default)
+
+
+def _default_storage() -> StorageName:
+    explicit = _env("storage", "").strip()
+    if explicit:
+        return StorageName(explicit)
+    return StorageName.POSTGRES if os.environ.get(DATABASE_URL_ENV, "").strip() else StorageName.SQLITE
 
 
 def _env_list(name: str) -> tuple[str, ...]:
@@ -225,12 +240,20 @@ class Settings:
     # A form boundary scoring below this is flagged ``split_uncertain`` (fields: ``confidence.review_threshold``).
     review_threshold: float = field(default_factory=lambda: float(_env("review_threshold", "0.85")))
 
-    storage: StorageName = field(default_factory=lambda: StorageName(_env("storage", StorageName.MEMORY.value)))
+    storage: StorageName = field(default_factory=_default_storage)
     # Only used with ``storage=sqlite``. Holds patient data: keep it on a protected disk, never in the repository.
     db_path: Path = field(default_factory=lambda: Path(_env("db_path", str(BACKEND_DIR / "data" / "app.db"))))
+    # Only used with ``storage=postgres``. Holds the password: never logged (left out of repr).
+    database_url: str = field(default_factory=lambda: os.environ.get(DATABASE_URL_ENV, "").strip(), repr=False)
+    # Postgres connections kept open at most, and seconds to wait for one (connect or a free pooled one).
+    db_pool_size: int = field(default_factory=lambda: int(_env("db_pool_size", "5")))
+    db_timeout_s: float = field(default_factory=lambda: float(_env("db_timeout_s", "10")))
 
-    # Jobs and their files are deleted this many seconds after creation.
+    # Jobs (database rows) are deleted this many seconds after creation.
     job_ttl_s: int = field(default_factory=lambda: int(_env("job_ttl_s", "3600")))
+    # Temporary files of a job (upload, page images, export) are deleted this many seconds
+    # after the job directory was last written, or with the job, whichever comes first.
+    file_ttl_s: int = field(default_factory=lambda: int(_env("file_ttl_s", "3600")))
     max_upload_mb: int = field(default_factory=lambda: int(_env("max_upload_mb", "50")))
     max_pages: int = field(default_factory=lambda: int(_env("max_pages", "200")))
     # Pixels per page image (width x height); also set as PIL's ``Image.MAX_IMAGE_PIXELS``.
@@ -258,10 +281,13 @@ class Settings:
         if self.render_dpi <= 0:
             raise ValueError("render_dpi must be positive")
         if min(self.claude_timeout_s, self.gemini_timeout_s, self.local_vlm_timeout_s, self.ocr_timeout_s,
-               self.job_ttl_s) <= 0:
+               self.job_ttl_s, self.file_ttl_s, self.db_timeout_s) <= 0:
             raise ValueError("timeouts and TTL must be positive")
-        if min(self.max_upload_mb, self.max_pages, self.max_image_pixels, self.max_concurrent_jobs) <= 0:
-            raise ValueError("upload, page, pixel and job limits must be positive")
+        if min(self.max_upload_mb, self.max_pages, self.max_image_pixels, self.max_concurrent_jobs,
+               self.db_pool_size) <= 0:
+            raise ValueError("upload, page, pixel, job and pool limits must be positive")
+        if self.storage is StorageName.POSTGRES and not self.database_url:
+            raise ValueError(f"storage postgres needs {DATABASE_URL_ENV}")
         if not 0.0 <= self.review_threshold <= 1.0:
             raise ValueError("review_threshold must be between 0 and 1")
         if self.segment.vlm >= self.review_threshold:

@@ -1,6 +1,8 @@
+import io
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -12,7 +14,11 @@ from PIL import Image
 from app.config import Settings
 from app.main import app, create_app
 from app.pipeline import ingest
+from app.field_crops import FIELD_NOT_FOUND, IMAGE_GONE, NO_BOX
 from app.providers.fake import FakeProvider
+from app.schemas import BBox, Job
+from app.storage.base import JobStoreError
+from app.storage.page_images import PAGES_DIR
 
 
 @pytest.fixture
@@ -178,3 +184,144 @@ def test_logs_go_to_stdout(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "log-line-marker" in result.stdout and "log-line-marker" not in result.stderr
     assert "debug-line-marker" not in result.stdout
+
+
+# --- Review: manual corrections, field crops, deletion, store errors ----------
+
+DUMMY_ID_NUMBER = "000000026"
+BOX = {"page": 0, "x0": 10.0, "y0": 10.0, "x1": 60.0, "y1": 40.0}
+
+
+def _done_job_id(client: TestClient) -> str:
+    created = client.post("/jobs", files={"file": ("scan.png", _png(), "image/png")})
+    job = client.get(f"/jobs/{created.json()['id']}").json()
+    assert job["status"] == "done"
+    return job["id"]
+
+
+def _field_url(job_id: str, group_id: str, field: str) -> str:
+    return f"/jobs/{job_id}/groups/{group_id}/fields/{field}"
+
+
+def test_patch_sets_a_manual_value_and_keeps_it(client):
+    job_id = _done_job_id(client)
+    group_id = client.get(f"/jobs/{job_id}").json()["groups"][0]["id"]
+
+    response = client.patch(_field_url(job_id, group_id, "id_number"), json={"value": DUMMY_ID_NUMBER})
+    assert response.status_code == 200
+    field = response.json()["groups"][0]["commitment"]["id_number"]
+    assert (field["value"], field["source"], field["needs_review"], field["confidence"]) == (
+        DUMMY_ID_NUMBER, "manual", False, 1.0)
+    assert field["reasons"] == ["manual_correction"]
+
+    stored = client.get(f"/jobs/{job_id}").json()
+    assert stored["groups"][0]["commitment"]["id_number"] == field
+    assert [(c["group_id"], c["field"], c["item"]) for c in stored["corrections"]] == [(group_id, "id_number", None)]
+
+
+def test_patch_list_item_and_new_item(client):
+    job_id = _done_job_id(client)
+    group = client.get(f"/jobs/{job_id}").json()["groups"][0]
+    count = len(group["commitment"]["central_numbers"])
+    url = _field_url(job_id, group["id"], "central_numbers")
+    assert client.patch(url, json={"value": "0011111", "item": count}).status_code == 200
+    assert client.patch(url, json={"value": "0022222", "item": 0}).status_code == 200
+    values = [f["value"] for f in client.get(f"/jobs/{job_id}").json()["groups"][0]["commitment"]["central_numbers"]]
+    assert values[0] == "0022222" and values[-1] == "0011111" and len(values) == count + 1
+
+
+def test_patch_date_and_sender(client):
+    from app.pipeline.normalize import load_senders
+
+    job_id = _done_job_id(client)
+    group_id = client.get(f"/jobs/{job_id}").json()["groups"][0]["id"]
+    sender = load_senders(Settings().senders_path)[0].canonical
+    assert client.patch(_field_url(job_id, group_id, "received_date"), json={"value": "2026-01-04"}).status_code == 200
+    assert client.patch(_field_url(job_id, group_id, "sender"), json={"value": sender}).status_code == 200
+    commitment = client.get(f"/jobs/{job_id}").json()["groups"][0]["commitment"]
+    assert (commitment["received_date"]["value"], commitment["sender"]["value"]) == ("2026-01-04", sender)
+
+
+@pytest.mark.parametrize(("field", "body"), [
+    ("received_date", {"value": "4/1/26"}),
+    ("sender", {"value": "not a listed sender"}),
+    ("no_such_field", {"value": "x"}),
+    ("id_number", {"value": "   "}),
+    ("id_number", {"value": DUMMY_ID_NUMBER, "item": 0}),
+    ("central_numbers", {"value": "1"}),
+    ("central_numbers", {"value": "1", "item": 99}),
+])
+def test_patch_rejects_invalid_corrections(client, field, body):
+    job_id = _done_job_id(client)
+    before = client.get(f"/jobs/{job_id}").json()
+    response = client.patch(_field_url(job_id, before["groups"][0]["id"], field), json=body)
+    assert response.status_code == 422
+    assert body["value"].strip() == "" or body["value"] not in response.text
+    assert client.get(f"/jobs/{job_id}").json() == before
+
+
+def test_patch_unknown_form_or_unfinished_job(client):
+    job_id = _done_job_id(client)
+    assert client.patch(_field_url(job_id, "0" * 32, "id_number"), json={"value": "1"}).status_code == 404
+    pending = Job()
+    client.app.state.jobs.create(pending)
+    assert client.patch(_field_url(pending.id, "0" * 32, "id_number"), json={"value": "1"}).status_code == 409
+
+
+def _with_box(client: TestClient, job_id: str) -> str:
+    """Give the ID field a box (the fake provider reads none); return the form id."""
+    store = client.app.state.jobs
+    job = store.get(job_id)
+    job.groups[0].commitment.id_number.bbox = BBox(**BOX)
+    store.update(job)
+    return job.groups[0].id
+
+
+def test_crop_of_a_field_is_a_png(client):
+    job_id = _done_job_id(client)
+    group_id = _with_box(client, job_id)
+    response = client.get(_field_url(job_id, group_id, "id_number") + "/crop")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "no-store"
+    # The box plus 10 px padding: x 0..70 clipped to the 60 px wide page, y 0..50.
+    assert Image.open(io.BytesIO(response.content)).size == (60, 50)
+
+
+def test_crop_after_the_page_image_is_gone_is_a_clear_404(client, tmp_path):
+    job_id = _done_job_id(client)
+    group_id = _with_box(client, job_id)
+    shutil.rmtree(tmp_path / job_id / PAGES_DIR)  # as the file TTL or a restart on an ephemeral disk would
+    response = client.get(_field_url(job_id, group_id, "id_number") + "/crop")
+    assert (response.status_code, response.json()["detail"]) == (404, IMAGE_GONE)
+    assert client.get(f"/jobs/{job_id}").status_code == 200  # the job itself remains
+
+
+def test_crop_without_a_box_or_field(client):
+    job_id = _done_job_id(client)
+    group_id = client.get(f"/jobs/{job_id}").json()["groups"][0]["id"]
+    assert client.get(_field_url(job_id, group_id, "id_number") + "/crop").json()["detail"] == NO_BOX
+    assert client.get(_field_url(job_id, group_id, "nope") + "/crop").json()["detail"] == FIELD_NOT_FOUND
+    assert client.get(_field_url(job_id, "0" * 32, "id_number") + "/crop").status_code == 404
+
+
+def test_delete_removes_the_job_and_its_files(client, tmp_path):
+    job_id = _done_job_id(client)
+    assert (tmp_path / job_id / PAGES_DIR).is_dir()
+    assert client.delete(f"/jobs/{job_id}").status_code == 204
+    assert client.get(f"/jobs/{job_id}").status_code == 404
+    assert client.app.state.jobs.list_commitments(job_id) == []
+    assert not (tmp_path / job_id).exists()
+
+
+def test_store_failure_is_503_and_logs_the_type_only(client, monkeypatch, caplog):
+    job_id = _done_job_id(client)
+
+    def broken(_job_id):
+        raise JobStoreError("OperationalError")
+
+    monkeypatch.setattr(client.app.state.jobs, "get", broken)
+    with caplog.at_level(logging.INFO):
+        response = client.get(f"/jobs/{job_id}")
+    assert (response.status_code, response.json()["detail"]) == (503, "job store unavailable")
+    assert [r.getMessage() for r in caplog.records if r.name == "app.main"] == ["job store failed: OperationalError"]

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
@@ -47,6 +48,7 @@ class JobRunner:
         """Run one job now and persist its start, progress and outcome."""
         # The orchestrator changes ``job`` in place.
         job.status = JobStatus.RUNNING
+        job.started_at = datetime.now(timezone.utc)
         if not self._jobs.update(job):
             logger.info("job %s was deleted before it started", job.id)
             return
@@ -56,6 +58,7 @@ class JobRunner:
             if job.status is not JobStatus.FAILED:
                 job.status, job.error = JobStatus.FAILED, type(exc).__name__
             logger.error("job %s failed: %s", job.id, type(exc).__name__)
+        job.finished_at = datetime.now(timezone.utc)
         if not self._jobs.update(job):
             logger.info("job %s was deleted while running", job.id)
             return

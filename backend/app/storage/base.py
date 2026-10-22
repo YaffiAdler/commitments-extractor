@@ -1,8 +1,9 @@
 """The interface every job store implements.
 
 The API depends only on this interface, so the store is chosen by
-configuration (``CE_STORAGE``) and both implementations share one test suite.
-Stores hold patient data: never log what they return, log ids/counts only.
+configuration (``CE_STORAGE`` / ``DATABASE_URL``) and every implementation
+shares one test suite. Stores hold patient data: never log what they return,
+log ids/counts only.
 """
 from __future__ import annotations
 
@@ -20,10 +21,20 @@ class JobExistsError(ValueError):
     """``create`` was called with the id of a stored job."""
 
 
+class JobStoreError(RuntimeError):
+    """The database failed. The message is the driver's exception type only:
+    driver messages and query parameters can quote field values."""
+
+
 @runtime_checkable
 class JobStore(Protocol):
     def init(self) -> None:
-        """Prepare the store; safe to call more than once (called at startup)."""
+        """Prepare the store (create or migrate the schema); safe to call more
+        than once and from several processes (called at startup)."""
+        ...
+
+    def close(self) -> None:
+        """Release connections (called at shutdown); the store is not used after."""
         ...
 
     def create(self, job: Job) -> None:
@@ -55,5 +66,6 @@ class JobStore(Protocol):
         ...
 
     def purge_expired(self, now: datetime | None = None) -> None:
-        """Delete jobs older than the TTL and orphaned job directories on disk."""
+        """Delete jobs older than the job TTL, and job directories on disk not
+        written for the file TTL (orphans included)."""
         ...

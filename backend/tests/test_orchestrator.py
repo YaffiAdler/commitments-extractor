@@ -198,3 +198,20 @@ def test_a_failed_form_is_finished_too(tmp_path, monkeypatch):
     monkeypatch.setenv("CE_RENDER_DPI", "72")
     job = _build(FailingProvider()).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 1)])
     assert job.groups[0].error and job.groups[0].finished
+
+
+def test_pages_are_saved_and_forms_timed(tmp_path, monkeypatch):
+    from app.storage.page_images import PageImageStore
+    from app.storage.tmp import TempStorage
+
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    settings = Settings()
+    images = PageImageStore(TempStorage(tmp_path / "tmp"))
+    orchestrator = Orchestrator(settings, FakeProvider(), form_types={},
+                                generic_form_type=load_generic_form_type(settings.form_types_dir), senders=[],
+                                page_images=images)
+    job = Job()
+    stored = TempStorage(tmp_path / "tmp").save_upload(job.id, _blank_pdf(tmp_path / "f.pdf", 2).read_bytes())
+    orchestrator.run(job, [stored])
+    assert all(images.load(job.id, stored.name, page) is not None for page in (0, 1))
+    assert all(group.read_ms is not None and group.read_ms >= 0 for group in job.groups)

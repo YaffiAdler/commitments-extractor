@@ -1,6 +1,9 @@
--- Job store schema (app/storage/sqlite.py). Idempotent: run at every startup.
--- Only search/filter fields are real columns; the full form group (with its
+-- Version 1 of the job store schema (app/storage/sql.py), the same for SQLite
+-- and Postgres. Applied once per database by the migration runner. IF NOT EXISTS
+-- keeps it safe on SQLite files created before schema versions existed.
+-- Only search/filter fields are real columns, the full form group (with its
 -- Commitment) is stored as JSON. No images are stored here.
+-- Comments must not contain semicolons: the runner splits statements on them.
 
 CREATE TABLE IF NOT EXISTS jobs (
     id           TEXT PRIMARY KEY,

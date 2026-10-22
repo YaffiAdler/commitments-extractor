@@ -146,3 +146,12 @@ def test_sender_is_orange_when_the_two_readings_differ():
 def test_confidence_settings_are_used():
     group, _ = _read(FakeProvider(), confidence=ConfidenceSettings(review_threshold=0.5))
     assert not group.commitment.first_name.needs_review
+
+
+def test_classification_is_kept_on_the_form():
+    group, _ = _read(FakeProvider())
+    result = group.classification
+    assert (result.form_type_id, result.known, result.sender_raw, result.sender_status) == (
+        fake.FAKE_FORM_TYPE_ID, True, fake.FAKE_SENDER_RAW, "matched")
+    assert result.sender_score > 0
+    assert result.sender_candidates[0].name == "כללית"

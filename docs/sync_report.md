@@ -8,6 +8,8 @@ Kind: **missing** = required but absent; **different** = present but not as spec
 
 **Update 2026-10-22:** a follow-up change fixed A10, B1, B3, B4, B5 and B6, marked ✅ in the tables with what was done. Test run after the fixes: `624 passed, 4 skipped`. Frontend `npm run build` and `npm run lint` pass. A second round fixed A3, A4, B2, B7, B8, B9, B10 and B11 (also marked ✅; test run after it: `659 passed, 4 skipped`). Still open: A1, A2, A5, A6, B12.
 
+**Update 2026-10-22 (round 3, job data in the database):** section C below audits where each piece of job data was kept and records the change that moves it to the database (SQLite locally, Postgres when `DATABASE_URL` is set). B1 and B13 are revised accordingly. Test run after round 3: `809 passed, 6 skipped` with `TEST_DATABASE_URL` pointing at a local Postgres 16; without it, the Postgres cases are skipped. Frontend `npm run build` and `npm run lint` pass.
+
 ## A. Stages 0-7
 
 | # | Area | Kind | Severity | Finding (where) | Proposed small fix |
@@ -27,7 +29,7 @@ Kind: **missing** = required but absent; **different** = present but not as spec
 
 | # | Guideline | Kind | Severity | Finding (where) | Proposed small fix |
 |---|-----------|------|----------|-----------------|--------------------|
-| B1 ✅ | No persistent state on disk | different | high | The default `CE_STORAGE=sqlite` writes `backend/data/app.db` (`config.py` `db_path`). `docker-compose.yml` mounts a named volume `job-db` for it. On Render's ephemeral disk the file is lost on redeploy anyway. | **Fixed 2026-10-22:** `CE_STORAGE` defaults to `memory`. `docker-compose.yml` sets `memory` and has no volume. The `job-db` volume moved to the opt-in `docker-compose.sqlite.yml`. README (settings, assumption 71, which supersedes 24, and Storage), CLAUDE.md, `conftest.py` and `test_default_storage_is_memory` are updated. |
+| B1 ✅ (revised in round 3) | No persistent state on disk | different | high | The default `CE_STORAGE=sqlite` writes `backend/data/app.db` (`config.py` `db_path`). `docker-compose.yml` mounts a named volume `job-db` for it. On Render's ephemeral disk the file is lost on redeploy anyway. | **Fixed 2026-10-22:** `CE_STORAGE` defaults to `memory`. `docker-compose.yml` sets `memory` and has no volume. The `job-db` volume moved to the opt-in `docker-compose.sqlite.yml`. README (settings, assumption 71, which supersedes 24, and Storage), CLAUDE.md, `conftest.py` and `test_default_storage_is_memory` are updated. **Revised in round 3:** without `CE_STORAGE` the store is Postgres if `DATABASE_URL` is set, else SQLite (README 90). The deployment keeps no state on the container disk (Postgres), and `docker-compose.yml` still sets `memory`. The local default without `DATABASE_URL` writes `backend/data/app.db`: a deliberate, reported deviation. |
 | B2 ✅ | Background processing with SSE progress | missing | high | There is no SSE endpoint. The frontend polls `GET /jobs/{id}` every 1 s (`App.tsx` `POLL_INTERVAL_MS`). Jobs do run in the background (`BackgroundTasks`). | **Fixed 2026-10-22 (round 2):** `GET /jobs/{id}/events` (`text/event-stream`, `app/events.py`): `progress` (status, forms total/done), `rows` (each finished form once), `end` (whole job), `missing`; keepalive comment, `Cache-Control: no-cache`, `X-Accel-Buffering: no`. The orchestrator adds groups after segmentation, sets the new `FormGroup.finished` and reports progress, which the runner saves. The UI uses `EventSource` and falls back to polling. The API has no authentication, so there is no token to accept in the query. Tests: `test_events.py`, `test_main.py` (stream of a finished job, 404). |
 | B3 ✅ | PORT from env | missing | high | The Dockerfile hard-codes `--port 8000` (`backend/Dockerfile` CMD). Render assigns `$PORT`. | **Fixed 2026-10-22:** `backend/Dockerfile`: `CMD ["sh","-c","exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]`. |
 | B4 ✅ | ALLOWED_ORIGINS / CORS | missing | high | No `CORSMiddleware` and no origins setting. A Vercel frontend calling a Render backend is cross-origin, so the browser blocks it. | **Fixed 2026-10-22:** `Settings.allowed_origins` (`CE_ALLOWED_ORIGINS`, comma-separated; empty = no CORS). `create_app` adds `CORSMiddleware` (GET/POST/DELETE, no credentials) only when the list is set. Tests: allowed origin gets the headers, foreign origin does not, empty setting means no CORS. |
@@ -39,10 +41,35 @@ Kind: **missing** = required but absent; **different** = present but not as spec
 | B10 ✅ | No field values in logs | different (risk) | medium | No direct value logging found: logs carry ids, counts, status codes and exception *types*. But `logger.exception("job %s failed")` in `run_job` prints the full traceback, and a third-party exception message (for example a pydantic `ValidationError`, which includes `input_value`) can contain field text. | **Fixed 2026-10-22 (round 2):** `logger.exception` is gone: a failed job logs `job <id> failed: <ExceptionType>` at ERROR, with no message or traceback (`runner.py`). Tests: an exception carrying a dummy ID number, through `JobRunner.run` and through the API, never reaches the log records, stdout or stderr; no record has `exc_info`. |
 | B11 ✅ | Pinned dependency versions | different | medium | `pyproject.toml` uses `>=` ranges and has no Python lock file. `package.json` uses `^` / `~` (`package-lock.json` exists, but the frontend Dockerfile runs `npm install`, not `npm ci`). | **Fixed 2026-10-22 (round 2):** `backend/requirements.lock` pins the full backend closure (41 packages, runtime + dev) to the tested versions, written by `scripts/lock_requirements.py` (markers evaluated for Linux / CPython 3.11) and used as constraints: Dockerfile `pip install -c requirements.lock .`, README/CLAUDE.md dev install with `-c`. Frontend: exact versions in `package.json` (lock updated to match) and `npm ci` in the Dockerfile; `npm ci --dry-run` accepts the lock. |
 | B12 | Frontend container | extra / different | low | The frontend Dockerfile runs the Vite **dev** server. Vercel builds it separately, so this only affects compose. | Optional: a multi-stage build that serves `dist/`. Not needed for Vercel. |
-| B13 | Hard-coded paths | matches (minor) | low | pathlib is used everywhere (no `os.path`). Data paths default to `BACKEND_DIR` and can be overridden by env. `SqliteJobStore` `SCHEMA_PATH` is fixed to `BACKEND_DIR/data/schema.sql` (not configurable, but inside the image). | None needed. Optionally derive it from `CE_DB_SCHEMA_PATH`. |
+| B13 | Hard-coded paths | matches (minor) | low | pathlib is used everywhere (no `os.path`). Data paths default to `BACKEND_DIR` and can be overridden by env. `SqliteJobStore` `SCHEMA_PATH` is fixed to `BACKEND_DIR/data/schema.sql` (not configurable, but inside the image). **Round 3:** replaced by `sql.MIGRATIONS_DIR` = `BACKEND_DIR/data/migrations` (inside the image). | None needed. |
 | B14 | `/health` endpoint | matches | — | `GET /health` returns `{"status": "ok"}`, unauthenticated, with no I/O (`main.py`). | — |
 | B15 | Secrets from env | matches | — | `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` are read from env. `.env*` is git-ignored. | — |
 | B16 | Linux container | matches (not built) | — | `python:3.11-slim` + `tesseract-ocr` / `tesseract-ocr-heb`. The image was not built during this review. | — |
+
+## C. Job data: where it is kept (round 3)
+
+Audit of `main` before round 3. "DB" means the SQLite store (`CE_STORAGE=sqlite`), which was opt-in: the default `memory` store kept **every** row below in memory only. "Not kept" means the data was produced and then dropped.
+
+| # | Data | Before round 3 | Round 3 |
+|---|------|----------------|---------|
+| C1 | Job id, status, created, error (type only) | DB `jobs` columns | DB (unchanged) |
+| C2 | Uploaded files (metadata) | DB `jobs.source_file`: the generated name only, one file per job (more raised `ValueError`). Size and type are not kept (the type is the suffix). The file itself is in the temp dir. | DB `job_files` (several per job); the file stays in the temp dir (`CE_FILE_TTL_S`) |
+| C3 | FormGroup: pages, rotation, `split_confidence`, `split_reasons`, `form_reasons`, `finished` | DB, inside `commitments.data_json` | DB (unchanged) |
+| C4 | Irrelevant pages | DB `jobs.irrelevant_pages_json` | DB (unchanged) |
+| C5 | Classification: form type | DB (`Commitment.form_type_id` in `data_json`) | DB, plus `FormGroup.classification.form_type_id` / `known` |
+| C6 | Classification: `sender_raw` | DB (`sender.raw_value`) | DB, plus `classification.sender_raw` |
+| C7 | Classification: matched sender | DB (`sender.value`) | DB (unchanged) |
+| C8 | Classification: match score and candidates | Partly kept. For an unmatched sender, candidates are kept as `sender_candidate:` reasons. For a matched one, the score is overwritten by the confidence stage and the candidates are dropped. The model's `evidence` text is never kept (by design). | DB: `classification.sender_status`, `sender_score`, `sender_candidates`; `evidence` still not kept |
+| C9 | Commitment, every Field (value, raw_value, confidence, needs_review, reasons, explanations, source, bbox, signals) | DB, inside `data_json` | DB (unchanged) |
+| C10 | Central and commitment number lists | DB, inside `data_json` | DB (unchanged) |
+| C11 | Manual corrections | Did not exist (`FieldSource.MANUAL` was defined, but there was no endpoint) | New `PATCH .../fields/{field}`; field in `data_json` (`source=manual`) and audit rows in `corrections` |
+| C12 | Form-level errors | DB (`FormGroup.error` + `extraction_failed` in `data_json`) | DB (unchanged) |
+| C13 | Model call counts | DB (`FormGroup.vlm_calls`, `jobs.split_vlm_calls`) | DB (unchanged) |
+| C14 | Times | Not measured | DB: `jobs.started_at` / `finished_at`, `FormGroup.read_ms` |
+| C15 | Page images and crops | Memory only, during processing; never on disk | Page images in the temp dir (JPEG, `CE_FILE_TTL_S`), never in the DB; crops are made on request. Crop endpoint: 404 `image_gone`, UI "התמונה כבר לא זמינה" |
+| C16 | Waiting jobs (runner queue) | Memory (`asyncio.Semaphore`); failed as `Interrupted` at startup | Unchanged (by design: the upload may be gone after a restart) |
+
+Other round-3 changes: Postgres store (`DATABASE_URL`), versioned migrations with `schema_version`, `DELETE /jobs/{id}` removes the rows of every table plus the files, and DB errors are reported by type only (`JobStoreError`, API 503). Details are in the README (assumptions 90-98, Storage). The new public interfaces are listed in README "Job data in the database — changes to existing interfaces".
 
 ## Summary
 

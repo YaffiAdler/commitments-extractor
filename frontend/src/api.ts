@@ -1,8 +1,17 @@
 // Types mirror backend/app/schemas.py (only what the page uses).
 
+export interface BBox {
+  page: number
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
 export interface Field {
   value: string | null
   needs_review: boolean
+  bbox: BBox | null
 }
 
 export interface Commitment {
@@ -106,6 +115,22 @@ export function streamJob(jobId: string, handlers: JobStreamHandlers): Promise<J
 
 export async function exportJob(jobId: string): Promise<Blob> {
   return (await checked(await fetch(`${API}/jobs/${jobId}/export`, { method: 'POST' }))).blob()
+}
+
+// Detail of the crop endpoint's 404 once the page image was deleted (file TTL or a server restart).
+export const IMAGE_GONE = 'image_gone'
+
+export type CropResult = { kind: 'image'; blob: Blob } | { kind: 'gone' }
+
+// The field's box on its page (PNG). item: index in central/commitment number lists.
+export async function getCrop(jobId: string, groupId: string, field: string, item: number | null): Promise<CropResult> {
+  const query = item === null ? '' : `?item=${item}`
+  const response = await fetch(`${API}/jobs/${jobId}/groups/${groupId}/fields/${field}/crop${query}`)
+  if (response.status === 404) {
+    const body = await response.json().catch(() => null)
+    if (body?.detail === IMAGE_GONE) return { kind: 'gone' }
+  }
+  return { kind: 'image', blob: await (await checked(response)).blob() }
 }
 
 export async function deleteJob(jobId: string): Promise<void> {

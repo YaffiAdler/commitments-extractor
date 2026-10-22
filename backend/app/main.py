@@ -9,15 +9,18 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from PIL import Image
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings
+from app.corrections import CorrectionError, apply_correction
 from app.events import stream_job_events
 from app.export.xlsx import write_xlsx
+from app.field_crops import CropUnavailableError, field_crop_png
 from app.ocr import create_ocr_engine
 from app.pipeline.ingest import BYTES_PER_MB, FILE_SUFFIXES, MAGIC_BYTES_NEEDED, detect_file_kind
 from app.pipeline.classify import load_form_types, load_generic_form_type
@@ -26,8 +29,10 @@ from app.pipeline.orchestrator import Orchestrator
 from app.providers import create_provider
 from app.providers.base import ExtractionProvider
 from app.runner import JobRunner
-from app.schemas import Job, JobStatus
+from app.schemas import FormGroup, Job, JobStatus
 from app.storage import create_job_store
+from app.storage.base import JobStoreError
+from app.storage.page_images import PageImageStore
 from app.storage.tmp import TempStorage
 
 logger = logging.getLogger(__name__)
@@ -35,13 +40,25 @@ logger = logging.getLogger(__name__)
 EXPORT_FILE_NAME = "commitments.xlsx"
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # The methods the endpoints below use; the frontend sends no custom headers.
-CORS_METHODS = ("GET", "POST", "DELETE")
+CORS_METHODS = ("GET", "POST", "PATCH", "DELETE")
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 EVENTS_MEDIA_TYPE = "text/event-stream"
 # no-cache: never store the stream; X-Accel-Buffering: proxies (nginx, Render) must not buffer it.
 EVENTS_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 EVENTS_POLL_INTERVAL_S = 0.5
 EVENTS_KEEPALIVE_S = 15.0
+PNG_MEDIA_TYPE = "image/png"
+# Crops are patient data: the browser must not keep them.
+CROP_HEADERS = {"Cache-Control": "no-store"}
+STORE_ERROR_DETAIL = "job store unavailable"
+
+
+class FieldCorrectionRequest(BaseModel):
+    """Body of ``PATCH .../fields/{field}``: the reviewer's value; ``item`` is
+    the list index for central / commitment numbers (the list length adds one)."""
+
+    value: str
+    item: int | None = None
 
 
 def configure_logging(level: str) -> None:
@@ -62,13 +79,17 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
     configure_process(settings)
     storage = TempStorage(settings.tmp_dir)
     jobs = create_job_store(settings, storage)
+    page_images = PageImageStore(storage)
+    senders = load_senders(settings.senders_path)
+    sender_names = frozenset(sender.canonical for sender in senders)
     orchestrator = Orchestrator(
         settings=settings,
         provider=provider or create_provider(settings),
         form_types=load_form_types(settings.form_types_dir),
         generic_form_type=load_generic_form_type(settings.form_types_dir),
-        senders=load_senders(settings.senders_path),
+        senders=senders,
         ocr=create_ocr_engine(settings),
+        page_images=page_images,
     )
     runner = JobRunner(jobs, orchestrator, settings.max_concurrent_jobs)
 
@@ -81,17 +102,31 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
             logger.warning("%d unfinished jobs from a previous run marked as failed", interrupted)
         jobs.purge_expired()  # leftovers from a previous run
         yield
+        jobs.close()
 
     app = FastAPI(title="commitments-extractor", lifespan=lifespan)
+    app.state.jobs = jobs  # for tests and scripts that inspect the store behind the API
     if settings.allowed_origins:
         app.add_middleware(CORSMiddleware, allow_origins=list(settings.allowed_origins),
                            allow_methods=list(CORS_METHODS))
+
+    @app.exception_handler(JobStoreError)
+    async def job_store_failed(_: Request, exc: JobStoreError) -> JSONResponse:
+        # The message is the driver's exception type only (see JobStoreError).
+        logger.error("job store failed: %s", exc)
+        return JSONResponse({"detail": STORE_ERROR_DETAIL}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     def require_job(job_id: str) -> Job:
         job = jobs.get(job_id)
         if job is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
         return job
+
+    def require_group(job: Job, group_id: str) -> FormGroup:
+        group = job.group(group_id)
+        if group is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "form not found")
+        return group
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -135,8 +170,37 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
         out_path = write_xlsx(job, storage.output_path(job.id, EXPORT_FILE_NAME), settings.export)
         return FileResponse(out_path, media_type=XLSX_MEDIA_TYPE, filename=EXPORT_FILE_NAME)
 
+    @app.patch("/jobs/{job_id}/groups/{group_id}/fields/{field}")
+    def correct_field(job_id: str, group_id: str, field: str, body: FieldCorrectionRequest) -> Job:
+        """A reviewer's value for one field (see ``app/corrections.py``); only on a finished job."""
+        job = require_job(job_id)
+        if job.status is not JobStatus.DONE:
+            raise HTTPException(status.HTTP_409_CONFLICT, "job is not finished")
+        require_group(job, group_id)
+        try:
+            apply_correction(job, group_id, field, body.value, body.item, sender_names)
+        except CorrectionError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
+        if not jobs.update(job):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+        logger.info("job %s form %s: field %s corrected", job.id, group_id, field)
+        return job
+
+    @app.get("/jobs/{job_id}/groups/{group_id}/fields/{field}/crop")
+    def field_crop(job_id: str, group_id: str, field: str, item: int | None = None) -> Response:
+        """The field's box on its page as PNG. 404 ``image_gone`` once the page
+        image was deleted (file TTL, server restart); the job itself may remain."""
+        job = require_job(job_id)
+        group = require_group(job, group_id)
+        try:
+            png = field_crop_png(page_images, job.id, group, field, item)
+        except CropUnavailableError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+        return Response(png, media_type=PNG_MEDIA_TYPE, headers=CROP_HEADERS)
+
     @app.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_job(job_id: str) -> None:
+        """Deletes the job's rows in every table and its temporary files."""
         require_job(job_id)
         jobs.delete(job_id)
 

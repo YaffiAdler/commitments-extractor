@@ -73,3 +73,22 @@ th {
 .error {
   color: #cf222e;
 }
+
+.crop-link {
+  margin-inline-start: 0.4em;
+  padding: 0 0.3em;
+  font-size: 0.8em;
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5em;
+  margin-top: 1em;
+}
+
+.preview img {
+  max-width: 100%;
+  border: 1px solid #ccc;
+}

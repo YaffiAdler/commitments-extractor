@@ -110,3 +110,16 @@ def test_progress_is_saved_to_the_store(store, tmp_path):
     job = _stored_job(store)
     JobRunner(store, ProgressPipeline(), max_concurrent_jobs=1).run(job, tmp_path / "f.pdf")
     assert store.get(job.id).status is JobStatus.DONE
+
+
+def test_start_and_finish_times_are_saved(store, tmp_path):
+    class DonePipeline:
+        def run(self, job, stored_files, on_progress=None):
+            assert job.started_at is not None and job.finished_at is None
+            job.status = JobStatus.DONE
+            return job
+
+    job = _stored_job(store)
+    JobRunner(store, DonePipeline(), max_concurrent_jobs=1).run(job, tmp_path / "f.pdf")
+    loaded = store.get(job.id)
+    assert loaded.started_at <= loaded.finished_at

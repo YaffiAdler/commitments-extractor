@@ -10,14 +10,18 @@ from app.storage.tmp import TempStorage
 
 
 class MemoryJobStore:
-    def __init__(self, storage: TempStorage, ttl_s: int) -> None:
+    def __init__(self, storage: TempStorage, ttl_s: int, file_ttl_s: int | None = None) -> None:
         self._storage = storage
         self._ttl = timedelta(seconds=ttl_s)
+        self._file_ttl_s = ttl_s if file_ttl_s is None else file_ttl_s
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
 
     def init(self) -> None:
         """Nothing to prepare."""
+
+    def close(self) -> None:
+        """Nothing to release."""
 
     def create(self, job: Job) -> None:
         with self._lock:
@@ -69,4 +73,4 @@ class MemoryJobStore:
             expired = [job_id for job_id, job in self._jobs.items() if job.created_at < cutoff]
         for job_id in expired:
             self.delete(job_id)
-        self._storage.purge_older_than(self._ttl.total_seconds())
+        self._storage.purge_older_than(self._file_ttl_s)

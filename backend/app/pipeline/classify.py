@@ -55,7 +55,16 @@ from rapidfuzz import fuzz, process
 
 from app.pipeline.ingest import PageImage
 from app.providers.base import ExtractionProvider
-from app.schemas import FORM_TYPE_UNKNOWN, Field, FieldSignal, FormType, Sender, SignalSource
+from app.schemas import (
+    FORM_TYPE_UNKNOWN,
+    ClassificationResult,
+    Field,
+    FieldSignal,
+    FormType,
+    Sender,
+    SenderCandidate,
+    SignalSource,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +245,17 @@ class Classification:
     known: bool
     sender: SenderMatch
     form_reasons: tuple[str, ...]
+
+    def result(self) -> ClassificationResult:
+        """The record kept on the form (``FormGroup.classification``)."""
+        return ClassificationResult(
+            form_type_id=self.form_type.id if self.known else GENERIC_FORM_TYPE_ID,
+            known=self.known,
+            sender_raw=self.sender.raw,
+            sender_status=self.sender.status.value,
+            sender_score=self.sender.score,
+            sender_candidates=[SenderCandidate(name=name, score=score) for name, score in self.sender.candidates],
+        )
 
 
 def classify(pages: list[PageImage], form_types: dict[str, FormType], generic: FormType,

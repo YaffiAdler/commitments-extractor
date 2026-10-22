@@ -8,6 +8,9 @@ central numbers.
 A form that fails is marked (``FormGroup.error``, ``extraction_failed``) and
 the other forms are still read; the job fails only if every form failed.
 
+Each preprocessed page is also saved to the job's temporary directory when a
+``PageImageStore`` is given (for the crop endpoint; never to the database).
+
 Progress: the groups of a file are added to ``job.groups`` as soon as it is
 segmented, each gets ``finished=True`` when its reading ends, and the optional
 ``on_progress`` callback is called with the job after both steps.
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -27,10 +31,12 @@ from app.pipeline.ingest import PageImage
 from app.pipeline.read_form import FormReader
 from app.providers.base import ExtractionProvider
 from app.schemas import EXTRACTION_FAILED, FormGroup, FormType, Job, JobStatus, Sender
+from app.storage.page_images import PageImageStore
 
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[], None]
+MS_PER_S = 1000
 
 
 class Orchestrator:
@@ -42,6 +48,7 @@ class Orchestrator:
         generic_form_type: FormType,
         senders: list[Sender],
         ocr: OcrEngine | None = None,
+        page_images: PageImageStore | None = None,
     ) -> None:
         self._settings = settings
         self._provider = provider
@@ -49,6 +56,7 @@ class Orchestrator:
         self._reader = FormReader(provider, form_types, generic_form_type, classify.SenderMatcher(senders), ocr,
                                   confidence_settings=settings.confidence)
         self._ocr = ocr
+        self._page_images = page_images
         self._ingest_limits = ingest.IngestLimits.from_settings(settings)
 
     def run(self, job: Job, stored_files: list[Path], on_progress: Callable[[Job], None] | None = None) -> Job:
@@ -84,6 +92,9 @@ class Orchestrator:
             preprocess.preprocess(page, self._settings.preprocess, self._ocr)
             for page in ingest.load_file(path, self._ingest_limits)
         ]
+        if self._page_images is not None:
+            for page in pages:
+                self._page_images.save(job.id, page)
         result = segment.segment(pages, self._ocr, self._form_types, self._provider,
                                  self._settings.review_threshold, self._settings.segment)
         job.groups.extend(result.groups)
@@ -101,6 +112,7 @@ class Orchestrator:
     async def _read_form(self, group: FormGroup, pages: list[PageImage], semaphore: asyncio.Semaphore,
                          notify: ProgressCallback) -> None:
         calls = ProviderCalls(semaphore, self._settings.extraction)
+        started = time.perf_counter()
         try:
             await self._reader.read(group, pages, calls)
         except Exception as exc:  # one failed form must not stop the others; it is recorded on the form
@@ -110,5 +122,6 @@ class Orchestrator:
                            len(group.pages), group.error)
         finally:
             group.vlm_calls = calls.count
+            group.read_ms = round((time.perf_counter() - started) * MS_PER_S)
             group.finished = True
             notify()

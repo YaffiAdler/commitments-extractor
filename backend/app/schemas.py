@@ -73,6 +73,8 @@ class FieldSignal(BaseModel):
 NOT_FOUND = "not_found"
 # Set by the confidence stage on an empty field that the form type's YAML marks ``optional``.
 OPTIONAL_MISSING = "optional_missing"
+# The value was entered by a reviewer (``PATCH .../fields/{field}``), replacing the reading.
+MANUAL_CORRECTION = "manual_correction"
 
 
 class Field(BaseModel, Generic[T]):
@@ -228,6 +230,26 @@ CENTRAL_DUPLICATE = "central_duplicate"
 REVIEW_FORM_REASONS = (FORM_TYPE_UNKNOWN, EXTRACTION_FAILED, CENTRAL_DUPLICATE)
 
 
+class SenderCandidate(BaseModel):
+    """One listed sender and its fuzzy-match score (0..100) against the sender as read."""
+
+    name: str
+    score: float
+
+
+class ClassificationResult(BaseModel):
+    """What classification decided for one form, kept for review. The model's
+    free-text ``evidence`` is not kept (it may quote the page). ``sender_raw``
+    is the sender as read (patient-free, but never logged with the job)."""
+
+    form_type_id: str = PydField(description="the matched form type id, or 'generic'")
+    known: bool = PydField(description="False if no known layout matched (form_type_unknown)")
+    sender_raw: Optional[str] = None
+    sender_status: str = PydField(description="matched / not_in_list / ambiguous / not_read")
+    sender_score: float = PydField(default=0.0, ge=0.0, le=100.0, description="best WRatio score")
+    sender_candidates: list[SenderCandidate] = PydField(default_factory=list, description="best first")
+
+
 class FormGroup(BaseModel):
     """A run of pages in one uploaded file that form one commitment.
 
@@ -251,7 +273,9 @@ class FormGroup(BaseModel):
     split_reasons: list[str] = PydField(default_factory=list)
     form_reasons: list[str] = PydField(default_factory=list)
     commitment: Commitment = PydField(default_factory=Commitment)
+    classification: Optional[ClassificationResult] = None
     vlm_calls: int = PydField(default=0, ge=0, description="provider calls made to read this form, retries included")
+    read_ms: Optional[int] = PydField(default=None, ge=0, description="wall time of reading this form (all stages)")
     finished: bool = PydField(default=False, description="reading of this form has ended (also on error); "
                               "a progress marker for the UI")
     error: Optional[str] = PydField(default=None, description="exception type only; must not contain field values")
@@ -318,17 +342,36 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 
+class Correction(BaseModel):
+    """One manual correction of a field, kept as an audit trail. ``item`` is the
+    list index for ``central_numbers`` / ``commitment_numbers`` (None otherwise).
+    ``previous_raw_value`` is patient data: never log it."""
+
+    group_id: str
+    field: str
+    item: Optional[int] = PydField(default=None, ge=0)
+    corrected_at: datetime = PydField(default_factory=lambda: datetime.now(timezone.utc))
+    previous_raw_value: Optional[str] = None
+    previous_source: FieldSource = FieldSource.NONE
+
+
 class Job(BaseModel):
     """One upload-to-Excel run over one or more files."""
 
     id: str = PydField(default_factory=lambda: uuid4().hex)
     status: JobStatus = JobStatus.PENDING
     created_at: datetime = PydField(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: Optional[datetime] = PydField(default=None, description="processing started")
+    finished_at: Optional[datetime] = PydField(default=None, description="processing ended (done or failed)")
     files: list[str] = PydField(default_factory=list)
     groups: list[FormGroup] = PydField(default_factory=list)
     irrelevant_pages: list[IrrelevantPage] = PydField(default_factory=list)
     split_vlm_calls: int = PydField(default=0, ge=0)
+    corrections: list[Correction] = PydField(default_factory=list)
     error: Optional[str] = PydField(default=None, description="must not contain field values")
+
+    def group(self, group_id: str) -> Optional[FormGroup]:
+        return next((group for group in self.groups if group.id == group_id), None)
 
 
 # --- Reference data: backend/form_types/*.yaml and backend/data/senders.json ---
