@@ -25,7 +25,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Generic, Optional, TypeVar
 
-from app.schemas import CENTRAL_DUPLICATE, Commitment, Field, FormGroup, FormType, Sender
+from app.schemas import CENTRAL_DUPLICATE, NOT_FOUND, Commitment, Field, FormGroup, FormType, Sender
 
 T = TypeVar("T")
 
@@ -37,7 +37,6 @@ CENTURY = 100
 MONTHS_IN_YEAR = 12
 
 # Reason codes added to ``Field.reasons``.
-NOT_FOUND = "not_found"  # set by the ``Field`` validator
 UNPARSED_DATE = "unparsed_date"
 ID_NOT_DIGITS = "id_not_digits"
 ID_PADDED = "id_padded"
@@ -304,18 +303,13 @@ def _apply(field_: Field, normalizer: Callable[[str | None], Normalized], drop: 
     result = normalizer(field_.raw_value)
     reasons = [reason for reason in field_.reasons if reason not in (drop, NOT_FOUND)]
     reasons += [reason for reason in result.reasons if reason not in reasons]
-    return _rebuilt(field_, value=result.value, reasons=reasons)
+    return field_.revalidated(value=result.value, reasons=reasons)
 
 
 def _with_checks(field_: Field, *checks: Check) -> Field:
     reasons = list(field_.reasons)
     reasons += [check.reason for check in checks if check.reason and check.reason not in reasons]
-    return _rebuilt(field_, reasons=reasons)
-
-
-def _rebuilt(field_: Field, **update) -> Field:
-    """Re-validated, so a value that became None is flagged ``not_found``."""
-    return type(field_).model_validate({**field_.model_dump(), **update})
+    return field_.revalidated(reasons=reasons)
 
 
 def _dedupe(fields: list[Field[str]]) -> list[Field[str]]:

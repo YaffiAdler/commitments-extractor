@@ -26,9 +26,11 @@ is not a loaded id) selects ``generic.yaml`` and flags the whole form with
    ``SENDER_MIN_GAP`` points of the best, the sender stays empty
    (``sender_ambiguous``) — choosing would be a guess.
 5. *Matched* otherwise: ``value`` is the canonical name, ``raw_value`` the
-   text as read, ``confidence`` the match score / 100 (one signal; the
-   confidence stage may combine it with others). A score below 100 adds
-   ``sender_fuzzy_match``.
+   text as read. A score below 100 adds ``sender_fuzzy_match``. The
+   confidence stage replaces the provisional ``confidence`` (match score / 100).
+6. *Second reading:* the extraction call reads the sender too; that text is
+   matched the same way and compared with the matched sender
+   (``compare_sender_readings``) — a signal for the confidence stage.
 
 An empty ``sender_raw`` leaves the sender empty (``not_found``); text that
 is empty after normalization (only generic words, e.g. "קופת חולים") counts
@@ -53,7 +55,7 @@ from rapidfuzz import fuzz, process
 
 from app.pipeline.ingest import PageImage
 from app.providers.base import ExtractionProvider
-from app.schemas import FORM_TYPE_UNKNOWN, Field, FormType, Sender
+from app.schemas import FORM_TYPE_UNKNOWN, Field, FieldSignal, FormType, Sender, SignalSource
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,9 @@ SENDER_NOT_IN_LIST = "sender_not_in_list"
 SENDER_AMBIGUOUS = "sender_ambiguous"
 SENDER_FUZZY_MATCH = "sender_fuzzy_match"
 SENDER_CANDIDATE_PREFIX = "sender_candidate:"
+# The extraction call's own reading of the sender, matched the same way, compared with the matched sender.
+SENDER_READINGS_AGREE = "sender_readings_agree"
+SENDER_READINGS_DISAGREE = "sender_readings_disagree"
 
 # Generic words shared by many senders: they say nothing about which one it is,
 # and left in they lift every HMO (or hospital) close to the best match.
@@ -158,6 +163,17 @@ class SenderMatch:
         status_reasons = {SenderMatchStatus.NOT_IN_LIST: [SENDER_NOT_IN_LIST],
                           SenderMatchStatus.AMBIGUOUS: [SENDER_AMBIGUOUS]}
         return Field[str](raw_value=self.raw, reasons=[*status_reasons.get(self.status, []), *candidates])
+
+
+def compare_sender_readings(sender: Field[str], second: SenderMatch, second_text: str | None) -> None:
+    """Record the extraction call's reading of the sender on ``sender`` (in
+    place): a ``vlm`` signal with the text, and ``sender_readings_agree`` /
+    ``sender_readings_disagree`` when both readings matched a listed sender.
+    No outcome when either was not matched — and the value is never changed."""
+    sender.signals.append(FieldSignal(source=SignalSource.VLM, value=second_text))
+    if sender.value is None or second.status is not SenderMatchStatus.MATCHED:
+        return
+    sender.reasons.append(SENDER_READINGS_AGREE if second.canonical == sender.value else SENDER_READINGS_DISAGREE)
 
 
 class SenderMatcher:

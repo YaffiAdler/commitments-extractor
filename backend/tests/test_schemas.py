@@ -6,7 +6,18 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from app.schemas import BBox, Commitment, Field, FieldSource, FormGroup, Job, JobStatus
+from app.schemas import (
+    COMMITMENT_FIELDS,
+    OPTIONAL_MISSING,
+    BBox,
+    Commitment,
+    Field,
+    FieldSource,
+    FieldSpec,
+    FormGroup,
+    Job,
+    JobStatus,
+)
 
 BACKEND = Path(__file__).resolve().parents[1]
 
@@ -47,6 +58,28 @@ def test_missing_field_is_empty_and_flagged():
     assert f2.needs_review and f2.confidence == 0.0
 
 
+def test_empty_optional_field_may_skip_review():
+    f = Field[str](reasons=[OPTIONAL_MISSING], confidence=0.9)
+    assert not f.needs_review and f.confidence == 0.0 and "not_found" in f.reasons
+    assert f.revalidated(value="1", reasons=[]).value == "1"
+    assert f.revalidated(value=None, reasons=[]).needs_review
+
+
+def test_empty_list_field_is_flagged_unless_optional():
+    assert Commitment().field_needs_review("commitment_numbers")
+    assert not Commitment(optional_fields=["commitment_numbers"]).field_needs_review("commitment_numbers")
+    unreadable_item = Commitment(optional_fields=["commitment_numbers"], commitment_numbers=[Field[str]()])
+    assert unreadable_item.field_needs_review("commitment_numbers")
+
+
+def test_commitment_fields_are_the_extracted_fields():
+    assert set(COMMITMENT_FIELDS) == set(Commitment.model_fields) - {"form_type_id", "optional_fields"}
+
+
+def test_field_spec_is_required_by_default():
+    assert FieldSpec(labels=[], hint="", multiple=False, handwritten_possible=False).optional is False
+
+
 def test_empty_commitment_needs_review():
     assert Commitment().needs_review
     # The soft id-checksum flag alone keeps the form in review.
@@ -75,7 +108,8 @@ def test_form_type_yaml_structure(path):
     assert isinstance(doc["detect"]["keywords"], list) and "logo_hint" in doc["detect"]
     assert set(doc["fields"]) == REQUIRED_FIELDS
     for name, spec in doc["fields"].items():
-        assert set(spec) - {"pattern"} == {"labels", "hint", "multiple", "handwritten_possible"}
+        assert set(spec) - {"pattern", "optional"} == {"labels", "hint", "multiple", "handwritten_possible"}
+        assert isinstance(spec.get("optional", False), bool)
         assert "pattern" not in spec or name == "commitment_numbers"
     assert isinstance(doc["pages"]["typical"], int)
 

@@ -50,3 +50,11 @@ def test_missing_fields_are_empty_and_highlighted(tmp_path):
         cell = sheet.cell(row=2, column=column)
         assert cell.value is None
         assert cell.fill.start_color.rgb.endswith(REVIEW_FILL.start_color.rgb[-6:])
+
+
+def test_optional_empty_list_is_not_highlighted(tmp_path):
+    commitment = Commitment(optional_fields=["commitment_numbers"])
+    sheet = load_workbook(write_xlsx(_job(commitment), tmp_path / "out.xlsx")).active
+    column = [attribute for _, attribute in COLUMNS].index("commitment_numbers") + 1
+    assert sheet.cell(row=2, column=column).fill.fill_type is None
+    assert sheet.cell(row=2, column=column - 1).fill.fill_type == REVIEW_FILL.fill_type

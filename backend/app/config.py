@@ -96,6 +96,42 @@ class ExtractionSettings:
             raise ValueError("extract timeout must be positive and 0 <= backoff initial <= backoff max")
 
 
+def _env_float(name: str, default: str) -> float:
+    return float(_env(name, default))
+
+
+@dataclass(frozen=True)
+class ConfidenceSettings:
+    """Weights and review threshold of the field confidence score
+    (``app/pipeline/confidence.py``). Hand-chosen starting values, not
+    calibrated: the threshold is a temporary default until there is ground truth.
+    """
+
+    # Starting score by how the value was written.
+    base_printed: float = field(default_factory=lambda: _env_float("confidence_base_printed", "0.8"))
+    base_handwritten: float = field(default_factory=lambda: _env_float("confidence_base_handwritten", "0.55"))
+    base_closed_list: float = field(default_factory=lambda: _env_float("confidence_base_closed_list", "0.75"))
+    # Added when an independent reading agrees with the model's value.
+    ocr_agreement: float = field(default_factory=lambda: _env_float("confidence_ocr_agreement", "0.25"))
+    second_reading_agreement: float = field(
+        default_factory=lambda: _env_float("confidence_second_reading_agreement", "0.15"))
+    # Subtracted when an independent reading disagrees (an addition to the starting formula).
+    ocr_disagreement: float = field(default_factory=lambda: _env_float("confidence_ocr_disagreement", "0.3"))
+    second_reading_disagreement: float = field(
+        default_factory=lambda: _env_float("confidence_second_reading_disagreement", "0.3"))
+    # Subtracted once per failed validation rule.
+    hard_fail: float = field(default_factory=lambda: _env_float("confidence_hard_fail", "0.3"))
+    soft_fail: float = field(default_factory=lambda: _env_float("confidence_soft_fail", "0.1"))
+    illegible: float = field(default_factory=lambda: _env_float("confidence_illegible", "0.2"))
+    # A field scoring below this is flagged for review.
+    review_threshold: float = field(default_factory=lambda: _env_float("confidence_review_threshold", "0.9"))
+
+    def __post_init__(self) -> None:
+        for name, value in vars(self).items():
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"confidence {name} must be between 0 and 1")
+
+
 @dataclass(frozen=True)
 class Settings:
     form_types_dir: Path = field(default_factory=lambda: Path(_env("form_types_dir", str(BACKEND_DIR / "form_types"))))
@@ -115,7 +151,7 @@ class Settings:
     local_vlm_timeout_s: float = field(default_factory=lambda: float(_env("local_vlm_timeout_s", "300")))
     prompts_dir: Path = field(default_factory=lambda: Path(_env("prompts_dir", str(BACKEND_DIR / "prompts"))))
     prompt_version: str = field(default_factory=lambda: _env("prompt_version", "v1"))
-    # A field with confidence below this threshold is flagged for review.
+    # A form boundary scoring below this is flagged ``split_uncertain`` (fields: ``confidence.review_threshold``).
     review_threshold: float = field(default_factory=lambda: float(_env("review_threshold", "0.85")))
 
     storage: StorageName = field(default_factory=lambda: StorageName(_env("storage", StorageName.SQLITE.value)))
@@ -129,6 +165,7 @@ class Settings:
 
     preprocess: PreprocessSettings = field(default_factory=PreprocessSettings)
     extraction: ExtractionSettings = field(default_factory=ExtractionSettings)
+    confidence: ConfidenceSettings = field(default_factory=ConfidenceSettings)
     # Empty = find ``tesseract`` on PATH.
     tesseract_cmd: str = field(default_factory=lambda: _env("tesseract_cmd", ""))
     ocr_languages: str = field(default_factory=lambda: _env("ocr_languages", "heb+eng"))

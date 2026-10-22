@@ -4,13 +4,20 @@ import asyncio
 from datetime import date
 
 from form_fakes import LineOcr, blank_page, value_box
-from app.config import ExtractionSettings, Settings
+from app.config import ConfidenceSettings, ExtractionSettings, Settings
 from app.pipeline.calls import ProviderCalls
-from app.pipeline.classify import SenderMatcher, load_form_types, load_generic_form_type
+from app.pipeline.classify import (
+    SENDER_READINGS_AGREE,
+    SENDER_READINGS_DISAGREE,
+    SenderMatcher,
+    load_form_types,
+    load_generic_form_type,
+)
 from app.pipeline.extract import ILLEGIBLE
 from app.pipeline.normalize import DATE_TWO_DIGIT_YEAR, ID_PADDED, load_senders
 from app.pipeline.ocr_check import OCR_AGREES, OCR_DISAGREES
 from app.pipeline.read_form import FormReader
+from app.pipeline.reason_texts import REASON_TEXTS, SINGLE_READING
 from app.pipeline.reread import REREAD_AGREES, REREAD_DISAGREES
 from app.providers import fake
 from app.providers.fake import FakeProvider
@@ -19,11 +26,11 @@ from app.schemas import FieldReading, FormGroup, FormReading, SignalSource
 CALLS = ExtractionSettings(concurrency=2, call_timeout_s=5, max_attempts=1, backoff_initial_s=0, backoff_max_s=0)
 
 
-def _read(provider: FakeProvider, ocr=None) -> tuple[FormGroup, int]:
+def _read(provider: FakeProvider, ocr=None, confidence: ConfidenceSettings | None = None) -> tuple[FormGroup, int]:
     settings = Settings()
     reader = FormReader(provider, load_form_types(settings.form_types_dir),
                         load_generic_form_type(settings.form_types_dir),
-                        SenderMatcher(load_senders(settings.senders_path)), ocr)
+                        SenderMatcher(load_senders(settings.senders_path)), ocr, confidence_settings=confidence)
     group = FormGroup(source_file="f.pdf", pages=[0])
 
     async def main():
@@ -104,3 +111,38 @@ def test_values_are_normalized_after_the_checks():
     assert commitment.received_date.value == date(2025, 3, 15)
     assert DATE_TWO_DIGIT_YEAR in commitment.received_date.reasons
     assert [f.value for f in commitment.central_numbers] == ["012345"]
+
+
+def test_confidence_is_scored_from_the_signals():
+    reading = fake.default_reading()
+    reading.id_number = FieldReading(value=fake.FAKE_ID_NUMBER, bbox=value_box(top=0.1))
+    reading.central_numbers = [FieldReading(value="123456", source="sticker", bbox=value_box(top=0.3))]
+    group, _ = _read(FakeProvider(reading=reading, numbers=["123450"]), LineOcr(fake.FAKE_ID_NUMBER, "123450"))
+    commitment = group.commitment
+    assert commitment.id_number.confidence == 1.0 and not commitment.id_number.needs_review
+    central = commitment.central_numbers[0]
+    assert central.needs_review and REASON_TEXTS[REREAD_DISAGREES] in central.explanations
+    # Names are read once only (no OCR, no second look), so they stay in review.
+    assert commitment.first_name.needs_review and SINGLE_READING in commitment.first_name.reasons
+    assert group.needs_review
+
+
+def test_sender_is_green_when_both_readings_match_the_same_listed_sender():
+    group, _ = _read(FakeProvider())
+    sender = group.commitment.sender
+    assert SENDER_READINGS_AGREE in sender.reasons
+    assert sender.confidence == 0.9 and not sender.needs_review
+
+
+def test_sender_is_orange_when_the_two_readings_differ():
+    reading = fake.default_reading()
+    reading.sender = FieldReading(value="מכבי")
+    group, _ = _read(FakeProvider(reading=reading))
+    sender = group.commitment.sender
+    assert sender.value == "כללית"  # the classified sender is kept, not replaced
+    assert SENDER_READINGS_DISAGREE in sender.reasons and sender.needs_review
+
+
+def test_confidence_settings_are_used():
+    group, _ = _read(FakeProvider(), confidence=ConfidenceSettings(review_threshold=0.5))
+    assert not group.commitment.first_name.needs_review

@@ -40,13 +40,11 @@ IRRELEVANT_SHEET_TITLE = "עמודים לא רלוונטיים"
 IRRELEVANT_HEADERS = (SOURCE_FILE_HEADER, "עמוד")
 
 
-def _cell(value: Field | list[Field]) -> tuple[str | date | None, bool]:
-    """Cell value and whether it needs review. Numbers are kept as text
-    (leading zeros matter); an empty list counts as missing."""
+def _cell(value: Field | list[Field]) -> str | date | None:
+    """Cell value; numbers are kept as text (leading zeros matter)."""
     if isinstance(value, list):
-        text = LIST_SEPARATOR.join(f.value for f in value if f.value is not None)
-        return text or None, not value or any(f.needs_review for f in value)
-    return value.value, value.needs_review
+        return LIST_SEPARATOR.join(f.value for f in value if f.value is not None) or None
+    return value.value
 
 
 def _page_numbers(pages: list[int]) -> str:
@@ -57,13 +55,13 @@ def _page_numbers(pages: list[int]) -> str:
 def _write_row(sheet: Worksheet, row: int, group: FormGroup) -> None:
     commitment = group.commitment
     for column, (_, attribute) in enumerate(COLUMNS, start=1):
-        value, needs_review = _cell(getattr(commitment, attribute))
+        value = _cell(getattr(commitment, attribute))
         cell = sheet.cell(row=row, column=column, value=value)
         if isinstance(value, date):
             cell.number_format = DATE_FORMAT
         elif value is not None:
             cell.number_format = "@"
-        if needs_review:
+        if commitment.field_needs_review(attribute):
             cell.fill = REVIEW_FILL
     split_uncertain = SPLIT_UNCERTAIN in group.split_reasons
     extra = (group.source_file, _page_numbers(group.pages), SPLIT_UNCERTAIN_TEXT if split_uncertain else None,

@@ -70,14 +70,20 @@ class FieldSignal(BaseModel):
     note: Optional[str] = None
 
 
+NOT_FOUND = "not_found"
+# Set by the confidence stage on an empty field that the form type's YAML marks ``optional``.
+OPTIONAL_MISSING = "optional_missing"
+
+
 class Field(BaseModel, Generic[T]):
     """One extracted value plus everything needed to trust or review it.
 
     ``value`` is the normalized value (e.g. digits only, a ``date``);
     ``raw_value`` is the text as read. ``reasons`` lists machine-readable
     codes that explain the confidence, e.g. ``"not_found"``,
-    ``"id_checksum_failed"`` (a soft signal only), ``"ocr_low_score"``,
-    ``"handwritten"``, ``"conflicting_candidates"``. ``signals`` holds every
+    ``"id_checksum_failed"`` (a soft signal only), ``"ocr_agrees"``,
+    ``"handwritten"``; ``explanations`` holds the same reasons as Hebrew text
+    for the reviewer (set by the confidence stage). ``signals`` holds every
     independent reading (model, OCR, second look) for the confidence stage
     and for a reviewer.
     """
@@ -87,24 +93,36 @@ class Field(BaseModel, Generic[T]):
     confidence: float = PydField(default=0.0, ge=0.0, le=1.0)
     needs_review: bool = True
     reasons: list[str] = PydField(default_factory=list)
+    explanations: list[str] = PydField(default_factory=list)
     source: FieldSource = FieldSource.NONE
     bbox: Optional[BBox] = None
     signals: list[FieldSignal] = PydField(default_factory=list)
 
     @model_validator(mode="after")
     def _missing_is_flagged(self) -> "Field[T]":
-        # Principle 1: a missing value is empty and flagged, never guessed.
+        # Principle 1: a missing value is empty and flagged, never guessed —
+        # unless the form type says the field may be absent (``OPTIONAL_MISSING``).
         if self.value is None:
-            self.needs_review = True
+            self.needs_review = OPTIONAL_MISSING not in self.reasons
             self.confidence = 0.0
-            if "not_found" not in self.reasons:
-                self.reasons.append("not_found")
+            if NOT_FOUND not in self.reasons:
+                self.reasons.append(NOT_FOUND)
         return self
+
+    def revalidated(self, **update) -> "Field[T]":
+        """A validated copy with ``update`` applied, so a value that became
+        None is flagged ``not_found`` (``model_copy`` would skip validation)."""
+        return type(self).model_validate({**self.model_dump(), **update})
 
     @classmethod
     def missing(cls, *reasons: str) -> "Field[T]":
         """A field that was not found on the form."""
-        return cls(reasons=["not_found", *reasons])
+        return cls(reasons=[NOT_FOUND, *reasons])
+
+
+# The extracted fields of a Commitment, in export order (the YAML ``fields`` keys).
+COMMITMENT_FIELDS = ("first_name", "last_name", "id_number", "central_numbers", "received_date", "sender",
+                     "commitment_numbers")
 
 
 class Commitment(BaseModel):
@@ -112,7 +130,9 @@ class Commitment(BaseModel):
 
     ``central_numbers`` and ``commitment_numbers`` are lists because a single
     form can carry several "מרכזי" ("central") stickers and several commitment /
-    "דגימה" ("sample") numbers; all of them are kept.
+    "דגימה" ("sample") numbers; all of them are kept. ``optional_fields``
+    names the fields the form type's YAML marks ``optional`` (copied by the
+    confidence stage): an empty list field named there is not flagged.
     """
 
     form_type_id: Optional[str] = PydField(
@@ -130,17 +150,20 @@ class Commitment(BaseModel):
         description="canonical name from backend/data/senders.json (closed list)",
     )
     commitment_numbers: list[Field[str]] = PydField(default_factory=list)
+    optional_fields: list[str] = PydField(default_factory=list)
+
+    def field_needs_review(self, name: str) -> bool:
+        """True if field ``name`` requires a human look: a flagged value, or
+        an empty list field that is not optional."""
+        value = getattr(self, name)
+        if isinstance(value, list):
+            return (not value and name not in self.optional_fields) or any(f.needs_review for f in value)
+        return value.needs_review
 
     @property
     def needs_review(self) -> bool:
-        """True if any field (or a missing list field) requires a human look."""
-        scalars = [self.first_name, self.last_name, self.id_number, self.received_date, self.sender]
-        lists = [self.central_numbers, self.commitment_numbers]
-        return (
-            any(f.needs_review for f in scalars)
-            or any(not lst for lst in lists)
-            or any(f.needs_review for lst in lists for f in lst)
-        )
+        """True if any field requires a human look."""
+        return any(self.field_needs_review(name) for name in COMMITMENT_FIELDS)
 
 
 class RelativeBox(BaseModel):
@@ -324,6 +347,8 @@ class FieldSpec(BaseModel):
     handwritten_possible: bool
     # Optional regex the normalized value should fully match (a soft check; commitment_numbers only).
     pattern: Optional[str] = None
+    # True if the layout may lack this field: then an empty value is not flagged for review.
+    optional: bool = False
 
     @model_validator(mode="after")
     def _pattern_compiles(self) -> "FieldSpec":
@@ -363,7 +388,7 @@ class FormType(BaseModel):
 
     @model_validator(mode="after")
     def _covers_commitment_fields(self) -> "FormType":
-        expected = set(Commitment.model_fields) - {"form_type_id"}
+        expected = set(COMMITMENT_FIELDS)
         if set(self.fields) != expected:
             raise ValueError(f"fields must be exactly {sorted(expected)}")
         with_pattern = {name for name, spec in self.fields.items() if spec.pattern is not None}

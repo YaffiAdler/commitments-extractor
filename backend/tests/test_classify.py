@@ -12,9 +12,12 @@ from app.pipeline.classify import (
     SENDER_FUZZY_MATCH,
     SENDER_MIN_SCORE,
     SENDER_NOT_IN_LIST,
+    SENDER_READINGS_AGREE,
+    SENDER_READINGS_DISAGREE,
     SenderMatcher,
     SenderMatchStatus,
     classify,
+    compare_sender_readings,
     load_form_types,
     load_generic_form_type,
     normalize_sender_name,
@@ -22,7 +25,7 @@ from app.pipeline.classify import (
 from app.pipeline.ingest import PageImage
 from app.pipeline.normalize import load_senders
 from app.providers.fake import FakeProvider
-from app.schemas import FORM_TYPE_UNKNOWN, UNKNOWN_FORM_TYPE, FormClassification, FormGroup, Sender
+from app.schemas import FORM_TYPE_UNKNOWN, UNKNOWN_FORM_TYPE, FormClassification, FormGroup, Sender, SignalSource
 
 FORM_TYPES_DIR = Settings().form_types_dir
 
@@ -99,6 +102,23 @@ def test_exact_match_has_full_score_and_no_review(matcher):
     field = matcher.match("שערי צדק").to_field()
     assert (field.value, field.raw_value) == ("המרכז הרפואי שערי צדק", "שערי צדק")
     assert field.confidence == 1.0 and not field.needs_review and field.reasons == []
+
+
+@pytest.mark.parametrize(("first", "second", "outcome"), [
+    ("שירותי בריאות כללית", "כללית", SENDER_READINGS_AGREE),
+    ("כללית", "מכבי שירותי בריאות", SENDER_READINGS_DISAGREE),
+    ("כללית", "הדסה", None),   # second reading not in the list: no outcome
+    ("כללית", None, None),      # not read the second time
+    ("הדסה", "כללית", None),    # first not matched: stays empty, nothing filled in
+])
+def test_second_sender_reading_is_compared(matcher, first, second, outcome):
+    field = matcher.match(first).to_field()
+    value = field.value
+    compare_sender_readings(field, matcher.match(second), second)
+    outcomes = {SENDER_READINGS_AGREE, SENDER_READINGS_DISAGREE} & set(field.reasons)
+    assert outcomes == ({outcome} if outcome else set())
+    assert field.value == value
+    assert [(s.source, s.value) for s in field.signals] == [(SignalSource.VLM, second)]
 
 
 def test_fuzzy_match_says_so(matcher):

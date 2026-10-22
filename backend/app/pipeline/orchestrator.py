@@ -1,10 +1,9 @@
 """Run the pipeline stages over the files of one job.
 
 Wired so far: ingest -> preprocess -> segment -> (per form, concurrently)
-classify -> extract -> OCR cross-check -> second look -> normalize; then the
-forms of the whole job are compared for duplicate central numbers. confidence
-is not wired in yet, so every field except a matched sender stays at
-confidence 0 / needs review.
+classify -> extract -> OCR cross-check -> second look -> normalize ->
+confidence; then the forms of the whole job are compared for duplicate
+central numbers.
 
 A form that fails is marked (``FormGroup.error``, ``extraction_failed``) and
 the other forms are still read; the job fails only if every form failed.
@@ -40,7 +39,8 @@ class Orchestrator:
         self._settings = settings
         self._provider = provider
         self._form_types = form_types
-        self._reader = FormReader(provider, form_types, generic_form_type, classify.SenderMatcher(senders), ocr)
+        self._reader = FormReader(provider, form_types, generic_form_type, classify.SenderMatcher(senders), ocr,
+                                  confidence_settings=settings.confidence)
         self._ocr = ocr
         self._ingest_limits = ingest.IngestLimits(
             max_file_bytes=settings.max_upload_mb * ingest.BYTES_PER_MB,
