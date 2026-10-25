@@ -49,6 +49,12 @@ services:
         value: "12000000"
       - key: CE_RENDER_DPI
         value: "200"
+      # Scans finer than CE_RENDER_DPI (300 DPI on the samples) are scaled down to it as they are loaded.
+      - key: CE_DOWNSCALE_SCANS
+        value: "true"
+      # Pixels of all pages of one file: about 6 A4 pages at 200 DPI (scripts/measure_memory.py).
+      - key: CE_MAX_FILE_PIXELS
+        value: "30000000"
       - key: CE_MAX_CONCURRENT_JOBS
         value: "1"
       - key: CE_EXTRACT_CONCURRENCY

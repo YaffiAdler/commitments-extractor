@@ -33,6 +33,8 @@ class PageImageStore:
         self._storage = storage
 
     def save(self, job_id: str, page: PageImage) -> None:
+        if page.original is None:
+            raise PageImageError("page has no original image in memory")
         ok, encoded = cv2.imencode(PAGE_SUFFIX, page.original, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         if not ok:
             raise PageImageError("page image could not be encoded")

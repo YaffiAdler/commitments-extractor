@@ -3,6 +3,8 @@
 ``normalize_illumination`` works on the lightness channel only (LAB), so the
 colours of stamps and stickers survive for the VLM. ``binarize`` is for the
 separate Tesseract copy only — the VLM image is never binarized.
+Whole-page arrays stay ``uint8``: the float division runs on a few rows at a
+time, which gives the same pixels as dividing the whole page at once.
 """
 from __future__ import annotations
 
@@ -23,6 +25,9 @@ FULL_SCALE = 255.0
 # Without it the 8-bit steps of a dark photo become visible bands after the
 # division and CLAHE amplifies them. Kept high so faint pencil survives.
 PAPER_WHITE_POINT = 0.95
+# Rows divided in float32 at a time (a full-page float32 copy is 4 bytes per pixel).
+FLOAT_STRIP_ROWS = 256
+LIGHTNESS_CHANNEL = 0
 
 CLAHE_CLIP_LIMIT = 2.0
 CLAHE_TILES = (8, 8)
@@ -36,8 +41,9 @@ def normalize_illumination(image: np.ndarray) -> np.ndarray:
     contrast (CLAHE). Returns an image of the same shape and type."""
     if image.ndim == 2:
         return _normalize_lightness(image)
-    lightness, a, b = cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2LAB))
-    return cv2.cvtColor(cv2.merge((_normalize_lightness(lightness), a, b)), cv2.COLOR_LAB2BGR)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    lab[:, :, LIGHTNESS_CHANNEL] = _normalize_lightness(np.ascontiguousarray(lab[:, :, LIGHTNESS_CHANNEL]))
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR, dst=lab)
 
 
 def binarize(image: np.ndarray) -> np.ndarray:
@@ -61,9 +67,12 @@ def estimate_background(lightness: np.ndarray) -> np.ndarray:
 
 
 def _normalize_lightness(lightness: np.ndarray) -> np.ndarray:
-    background = np.maximum(estimate_background(lightness), MIN_BACKGROUND_LEVEL).astype(np.float32)
-    paper_level = background * PAPER_WHITE_POINT
-    flat = np.clip(lightness.astype(np.float32) / paper_level * FULL_SCALE, 0, FULL_SCALE).astype(np.uint8)
+    background = np.maximum(estimate_background(lightness), MIN_BACKGROUND_LEVEL)
+    flat = np.empty_like(lightness)
+    for top in range(0, lightness.shape[0], FLOAT_STRIP_ROWS):
+        rows = slice(top, top + FLOAT_STRIP_ROWS)
+        paper_level = background[rows].astype(np.float32) * PAPER_WHITE_POINT
+        flat[rows] = np.clip(lightness[rows].astype(np.float32) / paper_level * FULL_SCALE, 0, FULL_SCALE)
     clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILES)
     return clahe.apply(flat)
 

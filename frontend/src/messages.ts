@@ -2,8 +2,11 @@
 // or rule (never a field value), mapped here to text for the reviewer.
 import { ApiError } from './api'
 
+const OVER_MEMORY_BUDGET_TEXT = 'הקובץ גדול מדי לשרת ההדגמה, נסו לפצל אותו'
+
 const DETAIL_TEXT: Record<string, string> = {
   'file too large': 'הקובץ גדול מהמותר',
+  'file exceeds the memory budget': OVER_MEMORY_BUDGET_TEXT,
   'too many files': 'נבחרו יותר מדי קבצים להעלאה אחת',
   'only PDF, PNG, JPEG, TIFF or WEBP files are supported': 'ניתן להעלות רק PDF, PNG, JPEG, TIFF או WEBP',
   'job not found': 'העבודה לא נמצאה (ייתכן שנמחקה או שפג תוקפה)',
@@ -31,12 +34,22 @@ const STATUS_TEXT: Record<number, string> = {
   503: 'השירות אינו זמין כרגע',
 }
 
+// A failed job's `error` is the exception type; the ones a reviewer can act on get a text.
+const JOB_ERROR_TEXT: Record<string, string> = {
+  PixelBudgetError: OVER_MEMORY_BUDGET_TEXT,
+}
+
 const NETWORK_TEXT = 'אין חיבור לשרת'
 const UNKNOWN_TEXT = 'שגיאה לא צפויה'
 
 // "<what failed>: <why>", e.g. "ההעלאה נכשלה: סוג קובץ לא נתמך".
 export function failureText(action: string, error: unknown): string {
   return `${action}: ${reasonText(error)}`
+}
+
+// The text for a failed job's error type; an unknown type is shown as it is.
+export function jobErrorText(error: string): string {
+  return JOB_ERROR_TEXT[error] ?? error
 }
 
 export function reasonText(error: unknown): string {

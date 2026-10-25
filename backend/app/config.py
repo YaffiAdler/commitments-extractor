@@ -235,8 +235,11 @@ class Settings:
     senders_path: Path = field(default_factory=lambda: Path(_env("senders_path", str(BACKEND_DIR / "data" / "senders.json"))))
     tmp_dir: Path = field(default_factory=lambda: Path(_env("tmp_dir", str(Path(tempfile.gettempdir()) / "commitments-extractor"))))
     # DPI for rendering PDF pages that are not a single full-page scan
-    # (scans are extracted at their native resolution).
+    # (scans are extracted at their native resolution unless ``downscale_scans``).
     render_dpi: int = field(default_factory=lambda: int(_env("render_dpi", "250")))
+    # Scale scans finer than ``render_dpi`` down to it as they are loaded (less memory per page):
+    # full-page PDF scans, and images whose DPI metadata says they are finer.
+    downscale_scans: bool = field(default_factory=lambda: _env_bool("downscale_scans", False))
     provider: ProviderName = field(default_factory=lambda: ProviderName(_env("provider", ProviderName.CLAUDE.value)))
     claude_model: str = field(default_factory=lambda: _env("claude_model", "claude-opus-5-5"))
     claude_timeout_s: float = field(default_factory=lambda: float(_env("claude_timeout_s", "60")))
@@ -274,6 +277,9 @@ class Settings:
     # Pixels per page image (width x height); also set as PIL's ``Image.MAX_IMAGE_PIXELS``.
     # 50M covers A3 at 400 DPI and keeps one RGB copy around 150 MB.
     max_image_pixels: int = field(default_factory=lambda: int(_env("max_image_pixels", "50000000")))
+    # Pixels of all pages of one file once loaded (after ``downscale_scans``), checked at upload and
+    # before the first page is decoded. The default (about 1.5 GB as BGR) only stops extreme files.
+    max_file_pixels: int = field(default_factory=lambda: int(_env("max_file_pixels", "500000000")))
     # Jobs processed at once; further uploads wait as ``pending``.
     max_concurrent_jobs: int = field(default_factory=lambda: int(_env("max_concurrent_jobs", "2")))
     # Level of the app's logs on stdout (DEBUG, INFO, WARNING, ERROR, CRITICAL).
@@ -325,8 +331,8 @@ class Settings:
         if min(self.claude_timeout_s, self.gemini_timeout_s, self.local_vlm_timeout_s, self.ocr_timeout_s,
                self.job_ttl_s, self.file_ttl_s, self.db_timeout_s) <= 0:
             raise ValueError("timeouts and TTL must be positive")
-        if min(self.max_upload_mb, self.max_files, self.max_pages, self.max_image_pixels, self.max_concurrent_jobs,
-               self.db_pool_size) <= 0:
+        if min(self.max_upload_mb, self.max_files, self.max_pages, self.max_image_pixels, self.max_file_pixels,
+               self.max_concurrent_jobs, self.db_pool_size) <= 0:
             raise ValueError("upload, file, page, pixel, job and pool limits must be positive")
         if self.storage is StorageName.POSTGRES and not self.database_url:
             raise ValueError(f"storage postgres needs {DATABASE_URL_ENV}")

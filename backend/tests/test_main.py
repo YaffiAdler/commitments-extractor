@@ -234,6 +234,17 @@ def test_too_many_pages_per_file_and_per_upload(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []  # nothing stored
 
 
+def test_file_over_the_pixel_budget_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("CE_TMP_DIR", str(tmp_path))
+    monkeypatch.setenv("CE_RENDER_DPI", "72")  # an A4 page is 595 x 842 = 500,990 pixels
+    monkeypatch.setenv("CE_MAX_FILE_PIXELS", "1000000")
+    client = TestClient(create_app(Settings(), FakeProvider()))
+    refused = client.post("/jobs", files={"files": ("a.pdf", _pdf(2), "application/pdf")})
+    assert (refused.status_code, refused.json()["detail"]) == (413, "file exceeds the memory budget")
+    assert list(tmp_path.iterdir()) == []  # nothing stored
+    assert client.post("/jobs", files={"files": ("a.pdf", _pdf(1), "application/pdf")}).status_code == 201
+
+
 def test_request_body_over_the_upload_limits_is_413(client):
     # CE_MAX_UPLOAD_MB=1 and CE_MAX_FILES=20 (default): a body over ~21 MB is refused before it is read.
     response = client.post("/jobs", content=b"x" * (22 * 1024 * 1024), headers={"Content-Type": "multipart/form-data"})
@@ -282,7 +293,7 @@ def test_failed_job_logs_no_field_value(client, monkeypatch, caplog):
     def failing_load(path, limits):
         raise ValueError(f"bad id {secret}")
 
-    monkeypatch.setattr(ingest, "load_file", failing_load)
+    monkeypatch.setattr(ingest, "iter_pages", failing_load)
     with caplog.at_level(logging.DEBUG):
         job_id = client.post("/jobs", files={"files": ("scan.png", _png(), "image/png")}).json()["id"]
     assert client.get(f"/jobs/{job_id}").json()["error"] == "ValueError"

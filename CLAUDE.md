@@ -25,6 +25,7 @@ cd backend && TEST_DATABASE_URL=<postgres url> ../.venv/Scripts/python -m pytest
 .venv/Scripts/python scripts/extract_report.py                                   # stage 5 on samples/ -> eval/extract_report.md (counts only)
 .venv/Scripts/python scripts/make_sample_output.py [out] [--columns]             # docs/sample_output.xlsx from fake-provider dummy data
 .venv/Scripts/python scripts/check_gemini.py [model]                             # Gemini connection check with a blank dummy page
+.venv/Scripts/python scripts/measure_memory.py [sample.pdf] [--pages N] [--dump job.json]  # peak RSS per stage, render.yaml limits, fake provider
 cd backend && ../.venv/Scripts/uvicorn app.main:app --reload                       # API on :8000 (default CE_PROVIDER=claude needs ANTHROPIC_API_KEY)
 cd backend && CE_PROVIDER=fake ../.venv/Scripts/uvicorn app.main:app --reload      # no API key, fixed dummy data
 cd backend && DATABASE_URL=<postgres url> ../.venv/Scripts/uvicorn app.main:app --reload  # jobs in Postgres (default: SQLite backend/data/app.db)

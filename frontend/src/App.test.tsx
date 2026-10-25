@@ -115,4 +115,22 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'התחלת עיבוד' }))
     expect((await screen.findByRole('alert')).textContent).toBe('ההעלאה נכשלה: ניתן להעלות רק PDF, PNG, JPEG, TIFF או WEBP')
   })
+
+  it('tells to split a file refused at upload for the memory budget', async () => {
+    vi.mocked(api.uploadFiles).mockRejectedValue(new api.ApiError(413, 'file exceeds the memory budget'))
+    const user = userEvent.setup()
+    render(<App />)
+    await user.upload(screen.getByLabelText('בחירת קבצים'), new File(['%PDF-'], 'a.pdf', { type: 'application/pdf' }))
+    await user.click(screen.getByRole('button', { name: 'התחלת עיבוד' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('ההעלאה נכשלה: הקובץ גדול מדי לשרת ההדגמה, נסו לפצל אותו')
+  })
+
+  it('tells to split a file whose job failed for the memory budget', async () => {
+    vi.mocked(api.streamJob).mockResolvedValue(job([], { status: 'failed', error: 'PixelBudgetError' }))
+    const user = userEvent.setup()
+    render(<App />)
+    await user.upload(screen.getByLabelText('בחירת קבצים'), new File(['%PDF-'], 'a.pdf', { type: 'application/pdf' }))
+    await user.click(screen.getByRole('button', { name: 'התחלת עיבוד' }))
+    expect((await screen.findByRole('status')).textContent).toContain('(הקובץ גדול מדי לשרת ההדגמה, נסו לפצל אותו)')
+  })
 })

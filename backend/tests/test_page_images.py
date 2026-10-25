@@ -1,8 +1,10 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
 from app.pipeline.ingest import PageImage
-from app.storage.page_images import PAGES_DIR, PageImageStore
+from app.storage.page_images import PAGES_DIR, PageImageError, PageImageStore
 from app.storage.tmp import TempStorage
 
 JOB_ID = "e" * 32
@@ -41,3 +43,10 @@ def test_page_goes_with_the_job_directory(tmp_path):
     store.save(JOB_ID, _page())
     storage.delete_job(JOB_ID)
     assert store.load(JOB_ID, FILE_ID, 0) is None
+
+
+def test_a_released_page_cannot_be_saved(tmp_path):
+    page = _page()
+    released = replace(page, ocr_image=np.zeros((40, 30), np.uint8)).without_original(lambda: None)
+    with pytest.raises(PageImageError):
+        PageImageStore(TempStorage(tmp_path)).save(JOB_ID, released)

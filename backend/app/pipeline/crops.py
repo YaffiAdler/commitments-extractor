@@ -38,14 +38,18 @@ def crop_field(bbox: BBox, pages: list[PageImage], for_ocr: bool) -> np.ndarray 
     """The value's box plus ``CROP_PADDING_PX`` from its page: the binarized
     ``ocr_image`` (grayscale ``original`` if there is none) ``for_ocr``, else
     the colour ``original`` (for the model, never binarized). None if the page
-    is not in the form or the crop is too small to read."""
+    is not in the form, its released original is gone, or the crop is too small to read."""
     page = next((p for p in pages if p.page_no == bbox.page), None)
     if page is None:
         return None
-    if for_ocr:
-        image = page.ocr_image if page.ocr_image is not None else to_gray(page.original)
+    if for_ocr and page.ocr_image is not None:
+        image = page.ocr_image
     else:
-        image = page.original
+        image = page.load_original()
+        if image is None:
+            return None
+        if for_ocr:
+            image = to_gray(image)
     return crop_bbox(image, bbox)
 
 

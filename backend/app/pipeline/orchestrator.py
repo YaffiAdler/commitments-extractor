@@ -8,8 +8,11 @@ central numbers.
 A form that fails is marked (``FormGroup.error``, ``extraction_failed``) and
 the other forms are still read; the job fails only if every form failed.
 
-Each preprocessed page is also saved to the job's temporary directory when a
-``PageImageStore`` is given (for the crop endpoint; never to the database).
+Pages are loaded and preprocessed one at a time. When a ``PageImageStore`` is
+given, each preprocessed page is saved to the job's temporary directory (for
+the crop endpoint; never to the database) and its full-resolution ``original``
+is dropped from memory: the colour crops of the second look read it back from
+that JPEG. Only the model and OCR copies of the pages stay in memory.
 
 Progress: the groups of a file are added to ``job.groups`` as soon as it is
 segmented, each gets ``finished=True`` when its reading ends, and the optional
@@ -21,7 +24,10 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
+
+import numpy as np
 
 from app.config import Settings
 from app.ocr.base import OcrEngine
@@ -32,7 +38,7 @@ from app.pipeline.read_form import FormReader
 from app.providers.base import ExtractionProvider
 from app.providers.diagnostics import exception_chain
 from app.schemas import EXTRACTION_FAILED, FormGroup, FormType, Job, JobStatus, Sender
-from app.storage.page_images import PageImageStore
+from app.storage.page_images import PageImageError, PageImageStore
 
 logger = logging.getLogger(__name__)
 
@@ -89,13 +95,7 @@ class Orchestrator:
         return job
 
     def _process_file(self, path: Path, job: Job, notify: ProgressCallback) -> None:
-        pages = [
-            preprocess.preprocess(page, self._settings.preprocess, self._ocr)
-            for page in ingest.load_file(path, self._ingest_limits)
-        ]
-        if self._page_images is not None:
-            for page in pages:
-                self._page_images.save(job.id, page)
+        pages = [self._prepare_page(job.id, page) for page in ingest.iter_pages(path, self._ingest_limits)]
         result = segment.segment(pages, self._ocr, self._form_types, self._provider,
                                  self._settings.review_threshold, self._settings.segment)
         job.groups.extend(result.groups)
@@ -105,6 +105,21 @@ class Orchestrator:
         by_page_no = {page.page_no: page for page in pages}
         forms = [(group, [by_page_no[n] for n in group.pages]) for group in result.groups]
         asyncio.run(self._read_forms(forms, notify))
+
+    def _prepare_page(self, job_id: str, page: PageImage) -> PageImage:
+        """Preprocess ``page``; with a page store, save it and keep only the copies the later stages read."""
+        page = preprocess.preprocess(page, self._settings.preprocess, self._ocr)
+        if self._page_images is None or page.ocr_image is None:
+            return page
+        self._page_images.save(job_id, page)
+        return page.without_original(partial(self._stored_original, job_id, page.file_id, page.page_no))
+
+    def _stored_original(self, job_id: str, source_file: str, page_no: int) -> np.ndarray | None:
+        try:
+            return self._page_images.load(job_id, source_file, page_no)
+        except PageImageError as exc:  # the crop is skipped; the second look records it as unavailable
+            logger.warning("page %d of file %s cannot be read back: %s", page_no, source_file, type(exc).__name__)
+            return None
 
     async def _read_forms(self, forms: list[tuple[FormGroup, list[PageImage]]], notify: ProgressCallback) -> None:
         semaphore = asyncio.Semaphore(self._settings.extraction.concurrency)

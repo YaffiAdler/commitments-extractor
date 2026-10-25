@@ -26,3 +26,12 @@ def test_crop_outside_or_too_small_is_none():
     pages = [blank_page()]
     assert crop_field(BBox(page=0, x0=5000, y0=10, x1=5100, y1=20), pages, for_ocr=True) is None
     assert crop_field(BBox(page=0, x0=0, y0=0, x1=0, y1=0), pages, for_ocr=True) is None
+
+
+def test_colour_crop_of_a_released_page_is_read_back():
+    page = blank_page(0)
+    stored = page.original
+    bbox = BBox(page=0, x0=100, y0=100, x1=300, y1=140)
+    assert crop_field(bbox, [page.without_original(lambda: stored)], for_ocr=False).ndim == 3
+    assert crop_field(bbox, [page.without_original(lambda: None)], for_ocr=False) is None
+    assert crop_field(bbox, [page.without_original(lambda: None)], for_ocr=True) is not None  # ocr_image in memory

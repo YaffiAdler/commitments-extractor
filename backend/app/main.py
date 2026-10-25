@@ -30,7 +30,7 @@ from app.lab_system.matching import LabMatch, match_samples, query_range
 from app.ocr import create_ocr_engine
 from app.log_filters import install_token_redaction
 from app.pipeline.ingest import (BYTES_PER_MB, FILE_SUFFIXES, MAGIC_BYTES_NEEDED, FileTooLargeError, IngestError,
-                                 count_pages, detect_file_kind)
+                                 IngestLimits, count_pages, count_pixels, detect_file_kind)
 from app.pipeline.classify import load_form_types, load_generic_form_type
 from app.pipeline.normalize import load_senders
 from app.pipeline.orchestrator import Orchestrator
@@ -66,6 +66,8 @@ JPEG_MEDIA_TYPE = "image/jpeg"
 CROP_HEADERS = {"Cache-Control": "no-store"}
 STORE_ERROR_DETAIL = "job store unavailable"
 TOO_MANY_PAGES_DETAIL = "too many pages"
+# The file's pages together are over ``CE_MAX_FILE_PIXELS`` (the server's memory budget).
+OVER_PIXEL_BUDGET_DETAIL = "file exceeds the memory budget"
 LAB_SYSTEM_ERROR_DETAIL = "lab system unavailable"
 
 
@@ -188,6 +190,8 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
             raise HTTPException(status.HTTP_404_NOT_FOUND, "commitment not found")
         return group
 
+    ingest_limits = IngestLimits.from_settings(settings)
+
     def read_upload(upload: UploadFile) -> tuple[bytes, str, int]:
         """The file's content, stored suffix and page count; 413 / 415 for a file the job cannot take."""
         data = upload.file.read(settings.max_upload_mb * BYTES_PER_MB + 1)
@@ -199,13 +203,16 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
                                 "only PDF, PNG, JPEG, TIFF or WEBP files are supported")
         try:
             pages = count_pages(data, kind)
+            pixels = count_pixels(data, kind, ingest_limits)
         except FileTooLargeError:
             raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "file too large") from None
         except IngestError:
             # Not refused here: ingest fails the job with the specific error type, as before.
-            pages = 0
+            pages = pixels = 0
         if pages > settings.max_pages:
             raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, TOO_MANY_PAGES_DETAIL)
+        if pixels > settings.max_file_pixels:
+            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, OVER_PIXEL_BUDGET_DETAIL)
         return data, FILE_SUFFIXES[kind], pages
 
     @app.get("/health")

@@ -6,7 +6,7 @@ import { Icon } from './components/Icon'
 import { LabMatchCard } from './components/LabMatchCard'
 import { ReviewTable } from './components/ReviewTable'
 import { UploadPanel } from './components/UploadPanel'
-import { failureText } from './messages'
+import { failureText, jobErrorText } from './messages'
 import {
   type FieldTarget,
   formFlags,
@@ -208,7 +208,7 @@ function App() {
             <section className="job-bar" aria-label="פעולות על העבודה">
               <span role="status" className={`job-status ${job.status}`}>
                 {STATUS_TEXT[job.status]}
-                {job.status === 'failed' && job.error && ` (${job.error})`}
+                {job.status === 'failed' && job.error && ` (${jobErrorText(job.error)})`}
               </span>
               <button type="button" className="ghost" onClick={() => void handleDelete()} disabled={busy && isActive(job)}>
                 <Icon name="trash" />

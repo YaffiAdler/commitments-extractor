@@ -215,3 +215,40 @@ def test_pages_are_saved_and_forms_timed(tmp_path, monkeypatch):
     orchestrator.run(job, [stored])
     assert all(images.load(job.id, stored.name, page) is not None for page in (0, 1))
     assert all(group.read_ms is not None and group.read_ms >= 0 for group in job.groups)
+
+
+def test_with_a_page_store_only_the_reduced_copies_stay_in_memory(tmp_path, monkeypatch):
+    from app.storage.page_images import PageImageStore
+    from app.storage.tmp import TempStorage
+
+    seen = []
+
+    class RecordingProvider(FakeProvider):
+        def extract_form(self, pages, form_type):
+            seen.extend(pages)
+            return super().extract_form(pages, form_type)
+
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    settings = Settings()
+    storage = TempStorage(tmp_path / "tmp")
+    orchestrator = Orchestrator(settings, RecordingProvider(), form_types={},
+                                generic_form_type=load_generic_form_type(settings.form_types_dir), senders=[],
+                                page_images=PageImageStore(storage))
+    job = Job()
+    stored = storage.save_upload(job.id, _blank_pdf(tmp_path / "f.pdf", 1).read_bytes())
+    orchestrator.run(job, [stored])
+    assert len(seen) == 1 and seen[0].original is None
+    assert seen[0].load_original().shape[:2] == seen[0].original_size
+
+
+def test_without_a_page_store_the_original_is_kept(tmp_path, monkeypatch):
+    seen = []
+
+    class RecordingProvider(FakeProvider):
+        def extract_form(self, pages, form_type):
+            seen.extend(pages)
+            return super().extract_form(pages, form_type)
+
+    monkeypatch.setenv("CE_RENDER_DPI", "72")
+    _build(RecordingProvider()).run(Job(), [_blank_pdf(tmp_path / "f.pdf", 1)])
+    assert seen[0].original is not None

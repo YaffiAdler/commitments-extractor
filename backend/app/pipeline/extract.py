@@ -128,5 +128,5 @@ def pixel_box(box: RelativeBox | None, pages: list[PageImage]) -> BBox | None:
     if x1 <= x0 or y1 <= y0 or (x1 - x0) * (y1 - y0) > MAX_BOX_AREA_FRACTION:
         return None
     page = pages[box.page]
-    height, width = page.original.shape[:2]
+    height, width = page.original_size
     return BBox(page=page.page_no, x0=x0 * width, y0=y0 * height, x1=x1 * width, y1=y1 * height)
