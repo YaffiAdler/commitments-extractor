@@ -9,7 +9,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       CE_GEMINI_MODEL: ${CE_GEMINI_MODEL:-gemini-3.8-flash}
       CE_STORAGE: memory
-    # Uploads contain patient data: keep them in memory only.
+    # Uploads may be sensitive: keep them in memory only.
     tmpfs:
       - /tmp/commitments-extractor
 
