@@ -9,6 +9,7 @@ This demo is for **sample forms only, never real patient data**. The frontend sa
 | `ANTHROPIC_API_KEY` | Render (backend) | your Anthropic API key. Secret |
 | `CE_DEMO_ACCESS_TOKEN` | Render (backend) | the demo access code, which you make up (step 1). Secret |
 | `CE_ALLOWED_ORIGINS` | Render (backend) | the Vercel URL of the frontend, e.g. `https://<project>.vercel.app`. Not secret |
+| `DATABASE_URL` | Render (backend) | the Neon connection string (pooled, with `sslmode=require`), where the extracted jobs are kept. Secret: it holds the password |
 | `VITE_API_URL` | Vercel (frontend) | the Render URL of the backend, e.g. `https://<service>.onrender.com`. Not secret, and it ends up in the browser bundle |
 
 The backend reads its settings with a `CE_` prefix (see the README "Settings" table). The access code is therefore `CE_DEMO_ACCESS_TOKEN`, and the allowed origins are `CE_ALLOWED_ORIGINS`. `ANTHROPIC_API_KEY` has no prefix: the Anthropic SDK reads that name.
@@ -31,9 +32,10 @@ Keep it somewhere safe, such as a password manager. You will paste it into Rende
 ## 2. Backend on Render (Blueprint)
 
 1. In the Render dashboard: **New → Blueprint**, then pick the repository. Render finds `render.yaml` at the repository root and shows one web service, `commitments-extractor-api` (Docker, free plan, health check `/health`).
-2. Render asks for the three values marked `sync: false`:
+2. Render asks for the four values marked `sync: false`:
    - `ANTHROPIC_API_KEY`: paste your key.
    - `CE_DEMO_ACCESS_TOKEN`: paste the code from step 1.
+   - `DATABASE_URL`: paste the Neon connection string (Neon console → **Connection Details**, pooled connection). Without it the backend refuses to start (`CE_STORAGE=postgres`).
    - `CE_ALLOWED_ORIGINS`: **leave it empty for now**. The Vercel URL is not known yet (step 4). While it is empty, no browser page can call the backend.
 3. Click **Apply** (or **Deploy Blueprint**). The first build installs Tesseract and the Python packages and takes several minutes.
 4. When the service is live, copy its URL from the top of the service page: `https://<service>.onrender.com`.
@@ -41,7 +43,7 @@ Keep it somewhere safe, such as a password manager. You will paste it into Rende
    - `https://<service>.onrender.com/health` in a browser should show `{"status":"ok"}`.
    - `https://<service>.onrender.com/senders` should show `{"detail":"access token missing or invalid"}` (401). That means the access check is on.
 
-To change a value later: open the service → **Environment** → edit the variable → **Save Changes**. Render redeploys with the new value. The other settings in `render.yaml` (limits, TTLs, `CE_STORAGE=memory`) can be changed on the same tab.
+To change a value later: open the service → **Environment** → edit the variable → **Save Changes**. Render redeploys with the new value. The other settings in `render.yaml` (limits, TTLs, `CE_STORAGE=postgres`) can be changed on the same tab.
 
 `CE_REQUIRE_ACCESS_TOKEN=true` is set in `render.yaml`. If `CE_DEMO_ACCESS_TOKEN` is missing, the service fails at startup instead of running open. The deploy log then names the missing variable (never its value).
 
@@ -81,9 +83,9 @@ On the free plan, Render stops the service after about 15 minutes without incomi
 Pages are loaded one at a time; scans are scaled down to 200 DPI as they are loaded (`CE_DOWNSCALE_SCANS=true`), and after preprocessing only the model copy and the OCR copy of each page stay in memory (about 12 MB per A4 page; the full-resolution page goes to the temp dir). Measured with `scripts/measure_memory.py` on 6 sample pages (Windows, fake provider, Tesseract included): peak 311 MB, of which about 160 MB is the Python process with its libraries (README, assumption 127). `render.yaml` also keeps the demo small: `CE_MAX_PAGES=6` and `CE_MAX_JOB_PAGES=6` pages per upload, `CE_MAX_FILES=3`, `CE_MAX_UPLOAD_MB=10`, `CE_MAX_IMAGE_PIXELS=12000000`, `CE_MAX_FILE_PIXELS=30000000` (a larger file is refused at upload with "הקובץ גדול מדי לשרת ההדגמה, נסו לפצל אותו") and `CE_MAX_CONCURRENT_JOBS=1`. If the instance runs out of memory, Render restarts it (the **Events** tab shows it) and the running job is lost. Lower the limits, or move to an instance type with more memory before raising them.
 
 ### Temporary storage, deleted on restart
-- `CE_STORAGE=memory`: jobs and their extracted fields live in the process memory only. A restart loses them, and so does a deploy, a sleep (cold start) or an out-of-memory restart. No database is used.
+- `CE_STORAGE=postgres`: jobs and their extracted fields are kept in the Neon database at `DATABASE_URL`, so they survive a restart, a deploy, a sleep (cold start) or an out-of-memory restart. A job that was still running at the restart is lost.
 - Uploaded files and page images are on the container's disk under `/tmp/commitments-extractor`. They are deleted at startup and at shutdown, and Render's disk is wiped on every restart anyway.
-- While the service runs, jobs and files are deleted 30 minutes after creation (`CE_JOB_TTL_S`, `CE_FILE_TTL_S`). A background purge checks every 2 minutes (`CE_PURGE_INTERVAL_S`). Download the Excel file before then.
+- Jobs (the extracted fields) are deleted from the database 8 hours after creation (`CE_JOB_TTL_S=28800`). Uploaded files and page images are deleted after 30 minutes (`CE_FILE_TTL_S`) or at a restart, whichever comes first; after that the job and its Excel export are still available, but the reviewer's crops show "image gone". A background purge checks every 2 minutes (`CE_PURGE_INTERVAL_S`), and at startup.
 - "מחיקת העבודה מהשרת" in the UI deletes a job at once.
 
 ### Limits and abuse protection
@@ -92,8 +94,8 @@ Pages are loaded one at a time; scans are scaled down to 200 DPI as they are loa
 - The client IP comes from `X-Forwarded-For` (`CE_TRUSTED_PROXY_HOPS=1`, the address Render's proxy appended). If all users seem to share one limit, or the limit never triggers, this assumption about Render's proxy is wrong. Check the header and adjust the value.
 - The progress stream sends the code in the URL (`?access_token=`), because the browser's EventSource cannot send headers. The backend masks it in its own logs. Render's request logs may still record full URLs.
 
-### Optional: keep jobs in Postgres
-For a demo that keeps jobs across restarts: create a Render Postgres in the same region, set `DATABASE_URL` on the service to its **Internal Database URL**, and remove `CE_STORAGE` (or set it to `postgres`). The extracted fields then stay in the database until `CE_JOB_TTL_S`; uploaded files and page images are still deleted on restart. The URL holds the password, so never share it.
+### Jobs in Neon (Postgres)
+The schema is created by the backend at startup (migrations in `backend/data/migrations/`). The database holds the extracted field values, so it holds patient data once real forms are uploaded. To keep jobs only in memory again, set `CE_STORAGE=memory`; to use a Render Postgres instead of Neon, set `DATABASE_URL` to its **Internal Database URL**. The URL holds the password, so never share it.
 
 ## Local check of the demo set-up
 

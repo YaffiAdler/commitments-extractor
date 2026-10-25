@@ -27,11 +27,15 @@ services:
       # Refuse to start without CE_DEMO_ACCESS_TOKEN.
       - key: CE_REQUIRE_ACCESS_TOKEN
         value: "true"
-      # Jobs in memory only: lost on restart, nothing kept on disk or in a database.
+      # Jobs in Postgres (Neon): they survive restarts and sleeps. The URL holds the password.
+      - key: DATABASE_URL
+        sync: false
+      # Explicit, so the server refuses to start if DATABASE_URL is missing instead of falling back to SQLite.
       - key: CE_STORAGE
-        value: memory
+        value: postgres
+      # Extracted fields stay 8 hours; uploads and page images still go after CE_FILE_TTL_S or a restart.
       - key: CE_JOB_TTL_S
-        value: "1800"
+        value: "28800"
       - key: CE_FILE_TTL_S
         value: "1800"
       - key: CE_PURGE_INTERVAL_S
