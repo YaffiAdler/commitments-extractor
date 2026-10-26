@@ -104,10 +104,8 @@ docs/                    screenshots, deployment guide, design notes
 
 ## 🗺️ Status and next steps
 The full pipeline, review screen and Excel export are working end to end, and the demo is deployed.
-Next: calibrate the confidence weights against a labeled evaluation set and report per-field accuracy.
 
 ## 📚 More documentation
 - [Deployment guide](docs/DEPLOY.md)
 - [Edge cases](docs/edge_cases.md)
 - [Form mapping](docs/form_mapping.md)
-- [Detailed development notes](docs/DEVELOPMENT.md) — the previous long README, one section per development phase
