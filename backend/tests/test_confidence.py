@@ -32,7 +32,22 @@ from app.pipeline.extract import HANDWRITTEN, ILLEGIBLE
 from app.pipeline.ocr_check import OCR_AGREES, OCR_DISAGREES, OCR_UNAVAILABLE
 from app.pipeline.reason_texts import REASON_TEXTS, SINGLE_READING
 from app.pipeline.reread import REREAD_AGREES, REREAD_DISAGREES, REREAD_UNAVAILABLE
-from app.schemas import CENTRAL_DUPLICATE, NOT_FOUND, OPTIONAL_MISSING, Commitment, Field, FieldSource
+from app.pipeline.reread_name import (
+    NAME_FILLED_FROM_SECOND_LOOK,
+    NAME_READINGS_AGREE,
+    NAME_READINGS_DISAGREE,
+    NAME_UNCERTAIN_LETTERS,
+)
+from app.schemas import (
+    CENTRAL_DUPLICATE,
+    NOT_FOUND,
+    OPTIONAL_MISSING,
+    Commitment,
+    Field,
+    FieldSignal,
+    FieldSource,
+    SignalSource,
+)
 
 WEIGHTS = ConfidenceSettings(
     base_printed=0.8, base_handwritten=0.55, base_closed_list=0.75, ocr_agreement=0.25,
@@ -167,7 +182,9 @@ def test_every_rule_outcome_has_a_severity():
     rule_codes = {value for name, value in vars(normalize).items()
                   if name.isupper() and not name.startswith("_") and isinstance(value, str)
                   and value not in form_level}
-    assert rule_codes == HARD_FAIL_REASONS | SOFT_FAIL_REASONS - {SENDER_FUZZY_MATCH}
+    # Soft signals from other stages: the sender match (stage 4) and uncertain name letters (stage 5d).
+    assert rule_codes == HARD_FAIL_REASONS | SOFT_FAIL_REASONS - {
+        SENDER_FUZZY_MATCH, NAME_UNCERTAIN_LETTERS, NAME_FILLED_FROM_SECOND_LOOK}
     assert not HARD_FAIL_REASONS & SOFT_FAIL_REASONS
     assert normalize.ID_CHECKSUM_FAILED in SOFT_FAIL_REASONS
 
@@ -287,3 +304,73 @@ def test_features_are_numeric_and_named():
     assert features["kind_handwritten"] == 1.0 and features["kind_printed"] == 0.0
     assert features["ocr_disagrees"] == 1.0 and features["soft_fails"] == 2.0
     assert "kind" not in features
+
+
+def _name_signals(count: int) -> list[FieldSignal]:
+    return [FieldSignal(source=SignalSource.REREAD, value="משה", variant=f"variant_{n}") for n in range(count)]
+
+
+def _handwritten_name(*reasons: str, readings: int = 0) -> Field[str]:
+    return Field[str](value="משה", raw_value="משה", source=FieldSource.HANDWRITTEN, reasons=[HANDWRITTEN, *reasons],
+                      signals=_name_signals(readings))
+
+
+@pytest.mark.parametrize("reasons, readings, expected", [
+    ([NAME_READINGS_AGREE], 1, 0.55 + 0.15),              # extract + 1 extra reading agree
+    ([NAME_READINGS_AGREE], 2, 0.55 + 0.15 + 0.05),       # extract + 2 extra readings agree
+    ([NAME_READINGS_AGREE], 3, 0.55 + 0.15 + 0.05 * 2),   # extract + 3 extra readings agree (the cap)
+    ([NAME_READINGS_AGREE, NAME_UNCERTAIN_LETTERS], 2, 0.55 + 0.15 + 0.05 - 0.1),
+    ([NAME_READINGS_DISAGREE], 2, 0.55 - 0.3),
+    ([], 2, 0.55),                                         # readings that did not all agree add nothing
+])
+def test_handwritten_name_score_arithmetic_with_the_default_weights(reasons, readings, expected):
+    weights = ConfidenceSettings()
+    scored = score_field(_handwritten_name(*reasons, readings=readings), FieldKind.HANDWRITTEN,
+                         WeightedScorer(weights), weights.review_threshold)
+    assert scored.confidence == pytest.approx(expected)
+    assert scored.needs_review  # with the default weights a handwritten name never reaches 0.9
+
+
+def test_handwritten_name_passes_only_with_a_higher_additional_weight():
+    weights = ConfidenceSettings(additional_reading_agreement=0.1)
+    scored = score_field(_handwritten_name(NAME_READINGS_AGREE, readings=3), FieldKind.HANDWRITTEN,
+                         WeightedScorer(weights), weights.review_threshold)
+    assert scored.confidence == pytest.approx(0.9) and not scored.needs_review
+
+
+def test_name_agreement_is_a_comparison_not_a_single_reading():
+    scored = _score(_handwritten_name(NAME_READINGS_AGREE, readings=1), FieldKind.HANDWRITTEN)
+    assert SINGLE_READING not in scored.reasons
+    assert FieldSignals.of(_handwritten_name(NAME_READINGS_AGREE, readings=3), FieldKind.HANDWRITTEN) \
+        .additional_agreements == 2
+
+
+def test_other_rereads_do_not_count_as_name_agreements():
+    field = _handwritten_name(NAME_READINGS_AGREE, readings=1)
+    field.signals.append(FieldSignal(source=SignalSource.REREAD, value="משה"))  # no variant: not a name reading
+    assert FieldSignals.of(field, FieldKind.HANDWRITTEN).additional_agreements == 0
+
+
+def _printed_name(*reasons: str, readings: int = 0) -> Field[str]:
+    return Field[str](value="משה", raw_value="משה", source=FieldSource.PRINTED, reasons=list(reasons),
+                      signals=_name_signals(readings))
+
+
+@pytest.mark.parametrize("reasons, readings, expected, reviewed", [
+    ([], 0, 0.8, True),                                    # read once, as today
+    ([NAME_READINGS_AGREE], 1, 0.95, False),               # extract + 1 extra reading agree
+    ([NAME_READINGS_AGREE], 2, 1.0, False),                # the default 2 variants (clipped at 1)
+    ([NAME_READINGS_DISAGREE], 2, 0.5, True),
+])
+def test_printed_name_score_arithmetic_with_the_default_weights(reasons, readings, expected, reviewed):
+    weights = ConfidenceSettings()
+    scored = score_field(_printed_name(*reasons, readings=readings), FieldKind.PRINTED, WeightedScorer(weights),
+                         weights.review_threshold)
+    assert scored.confidence == pytest.approx(expected) and scored.needs_review is reviewed
+
+
+def test_name_filled_by_the_second_look_is_low_and_always_reviewed():
+    weights = ConfidenceSettings(additional_reading_agreement=1.0, second_reading_agreement=1.0)
+    field = _handwritten_name(NAME_FILLED_FROM_SECOND_LOOK, readings=2)
+    scored = score_field(field, FieldKind.HANDWRITTEN, WeightedScorer(weights), weights.review_threshold)
+    assert scored.confidence == pytest.approx(0.55 - 0.1) and scored.needs_review

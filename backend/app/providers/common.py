@@ -15,7 +15,7 @@ from typing import Any, get_args
 
 import cv2
 import numpy as np
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.imaging.geometry import downscale_to_max_edge
 from app.pipeline.ingest import PageImage
@@ -25,6 +25,8 @@ from app.schemas import (
     FormClassification,
     FormReading,
     FormType,
+    NameCandidate,
+    NameReading,
     NumberReading,
     PageRelation,
     ReadingSource,
@@ -98,6 +100,28 @@ NUMBER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"value": {**_NULLABLE_STRING, "description": "digits only, or null"}},
     "required": ["value"],
+}
+
+# A name answer keeps at most this many candidates (the prompt asks for up to 3).
+MAX_NAME_CANDIDATES = 3
+UNCERTAIN_OPEN, UNCERTAIN_CLOSE = "[", "]"
+NAME_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "candidates": {
+            "type": "array",
+            "description": "up to 3 readings, the most likely first; empty if no name can be read",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "value": {"type": "string", "description": "the name exactly as written"},
+                    "marked": {"type": "string", "description": "the same text, every uncertain letter in [ ]"},
+                },
+                "required": ["value", "marked"],
+            },
+        },
+    },
+    "required": ["candidates"],
 }
 
 
@@ -192,6 +216,47 @@ def number_from_output(data: dict[str, Any]) -> NumberReading:
         return NumberReading.model_validate(data)
     except ValidationError:
         raise ProviderError("number answer does not match the schema") from None
+
+
+class _RawCandidate(BaseModel):
+    value: str
+    marked: str = ""
+
+
+class _RawNameAnswer(BaseModel):
+    candidates: list[_RawCandidate]
+
+
+def uncertain_positions(value: str, marked: str) -> list[int]:
+    """0-based positions in ``value`` of the letters ``marked`` puts in square
+    brackets; none if ``marked`` is not ``value`` with brackets added (the
+    marking is then not trusted)."""
+    plain, positions, inside = [], [], False
+    for char in marked:
+        if char == UNCERTAIN_OPEN and not inside:
+            inside = True
+        elif char == UNCERTAIN_CLOSE and inside:
+            inside = False
+        else:
+            if inside:
+                positions.append(len(plain))
+            plain.append(char)
+    return positions if "".join(plain).strip() == value and not inside else []
+
+
+def name_from_output(data: dict[str, Any]) -> NameReading:
+    """Parse output matching ``NAME_SCHEMA``: blank and repeated candidates are
+    dropped, at most ``MAX_NAME_CANDIDATES`` kept (error not chained, as above)."""
+    try:
+        answer = _RawNameAnswer.model_validate(data)
+    except ValidationError:
+        raise ProviderError("name answer does not match the schema") from None
+    candidates: list[NameCandidate] = []
+    for raw in answer.candidates:
+        value = raw.value.strip()
+        if value and all(c.value != value for c in candidates):
+            candidates.append(NameCandidate(value=value, uncertain=uncertain_positions(value, raw.marked.strip())))
+    return NameReading(candidates=candidates[:MAX_NAME_CANDIDATES])
 
 
 def form_classification_from_output(data: dict[str, Any], form_types: dict[str, FormType]) -> FormClassification:

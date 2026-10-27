@@ -29,6 +29,8 @@ def test_correction_replaces_value_and_keeps_raw_value_box_and_readings():
     correction = job.corrections[0]
     assert (correction.field, correction.item, correction.previous_raw_value, correction.previous_source) == (
         "id_number", None, "00000001 8", FieldSource.HANDWRITTEN)
+    assert (correction.previous_reasons, correction.previous_confidence, correction.previous_needs_review) == (
+        ["ocr_disagrees"], 0.5, True)
 
 
 def test_list_item_is_replaced_or_added():

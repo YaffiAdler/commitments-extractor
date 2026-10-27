@@ -12,6 +12,7 @@ from app.pipeline.ingest import PageImage
 from app.providers.common import (
     FORM_READING_SCHEMA,
     MAX_IMAGE_EDGE_PX,
+    NAME_SCHEMA,
     NUMBER_SCHEMA,
     PAGE_RELATION_SCHEMA,
     api_key_from_env,
@@ -19,8 +20,10 @@ from app.providers.common import (
     form_classification_from_output,
     form_classification_schema,
     form_reading_from_output,
+    name_from_output,
     number_from_output,
     page_relation_from_output,
+    uncertain_positions,
 )
 from app.providers.base import ProviderError
 from app.schemas import (
@@ -148,3 +151,39 @@ def test_api_key_unfit_for_a_header_is_refused_without_the_key(monkeypatch, valu
     with pytest.raises(ProviderError, match=KEY_ENV) as info:
         api_key_from_env(KEY_ENV)
     assert "dummy" not in str(info.value)
+
+
+def test_name_answer_keeps_ranked_candidates_and_uncertain_letters():
+    reading = name_from_output({"candidates": [
+        {"value": " דוד ", "marked": "[ד]וד"}, {"value": "רוד", "marked": "רוד"}, {"value": "", "marked": ""},
+        {"value": "דוד", "marked": "דוד"}, {"value": "זוד", "marked": "זוד"}, {"value": "דוך", "marked": "דו[ך]"},
+    ]})
+    assert [c.value for c in reading.candidates] == ["דוד", "רוד", "זוד"]  # blank and repeat dropped, at most 3
+    assert reading.top.uncertain == [0]
+
+
+def test_empty_name_answer_is_null():
+    assert name_from_output({"candidates": []}).top is None
+
+
+def test_name_answer_outside_schema_is_provider_error_without_values():
+    with pytest.raises(ProviderError) as error:
+        name_from_output({"candidates": [{"marked": "משה"}]})
+    assert "משה" not in str(error.value) and error.value.__cause__ is None
+
+
+@pytest.mark.parametrize("value, marked, expected", [
+    ("משה", "מ[ש]ה", [1]),
+    ("משה", "[מש]ה", [0, 1]),
+    ("בן ציון", "בן [צ]יון", [3]),
+    ("משה", "משה", []),
+    ("משה", "מ[ח]ה", []),     # marked is not the value: not trusted
+    ("משה", "מ[שה", []),      # unclosed bracket
+])
+def test_uncertain_positions(value, marked, expected):
+    assert uncertain_positions(value, marked) == expected
+
+
+def test_name_schema_requires_candidates():
+    assert NAME_SCHEMA["required"] == ["candidates"]
+    assert set(NAME_SCHEMA["properties"]["candidates"]["items"]["required"]) == {"value", "marked"}

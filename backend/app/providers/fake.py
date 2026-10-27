@@ -2,7 +2,8 @@
 
 The values are invented and do not belong to any real person. Tests can pass
 their own ``FormReading`` (several stickers, nulls, a cut sticker, ...) and
-the answers ``read_number`` gives, in call order.
+the answers ``read_number`` and ``read_name`` give, in call order;
+``name_requests`` records the field and wording of every ``read_name`` call.
 """
 from __future__ import annotations
 
@@ -18,6 +19,8 @@ from app.schemas import (
     FormClassification,
     FormReading,
     FormType,
+    NameReading,
+    NameWording,
     NumberReading,
     PageRelation,
 )
@@ -51,10 +54,13 @@ def default_reading() -> FormReading:
 class FakeProvider:
     name = "fake"
 
-    def __init__(self, reading: FormReading | None = None, numbers: Iterable[str | None] = ()) -> None:
+    def __init__(self, reading: FormReading | None = None, numbers: Iterable[str | None] = (),
+                 names: Iterable[NameReading] = ()) -> None:
         self._reading = reading or default_reading()
         self._numbers = list(numbers)
-        self._lock = threading.Lock()  # read_number is called from worker threads
+        self._names = list(names)
+        self.name_requests: list[tuple[str, NameWording]] = []
+        self._lock = threading.Lock()  # read_number / read_name are called from worker threads
 
     def extract_form(self, pages: list[PageImage], form_type: FormType | None) -> FormReading:
         return self._reading.model_copy(deep=True)
@@ -63,6 +69,12 @@ class FakeProvider:
         """The next of ``numbers``; None once they are used up."""
         with self._lock:
             return NumberReading(value=self._numbers.pop(0) if self._numbers else None)
+
+    def read_name(self, crop: np.ndarray, field_name: str, wording: NameWording) -> NameReading:
+        """The next of ``names``; no candidates once they are used up."""
+        with self._lock:
+            self.name_requests.append((field_name, wording))
+            return self._names.pop(0).model_copy(deep=True) if self._names else NameReading()
 
     def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:
         """A Clalit Form 17 when that type is loaded, else "unknown"; the sender

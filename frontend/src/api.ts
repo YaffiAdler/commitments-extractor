@@ -11,6 +11,16 @@ export interface BBox {
 
 export type FieldSource = 'printed' | 'handwritten' | 'barcode' | 'stamp' | 'sticker' | 'manual' | 'none'
 
+// One independent reading kept next to a field's value (OCR, second look, name second look).
+export interface FieldSignal {
+  source: 'vlm' | 'ocr' | 'reread' | 'name_list'
+  value: string | null
+  // Name second look only: the crop variant, the ranked candidates (value first) and the uncertain letters.
+  variant: string | null
+  candidates: string[]
+  uncertain: number[]
+}
+
 export interface Field {
   value: string | null
   raw_value: string | null
@@ -21,6 +31,7 @@ export interface Field {
   explanations: string[]
   source: FieldSource
   bbox: BBox | null
+  signals: FieldSignal[]
 }
 
 export const SINGLE_FIELDS = ['first_name', 'last_name', 'id_number', 'received_date', 'sender'] as const
@@ -113,6 +124,18 @@ export async function getJob(jobId: string): Promise<Job> {
 
 export async function getSenders(): Promise<string[]> {
   return (await request('/senders')).json()
+}
+
+// Mirrors backend/app/review_levels.py (thresholds from config.ReviewLevelSettings).
+export interface ReviewLevelConfig {
+  glance_min_confidence: number
+  verify_below_confidence: number
+  must_verify_reasons: string[]
+  show_confidence_percent: boolean
+}
+
+export async function getReviewLevels(): Promise<ReviewLevelConfig> {
+  return (await request('/review-levels')).json()
 }
 
 // Mirrors backend/app/events.py.

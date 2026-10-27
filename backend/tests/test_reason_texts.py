@@ -1,6 +1,6 @@
 import pytest
 
-from app.pipeline import classify, extract, normalize, ocr_check, reread
+from app.pipeline import classify, extract, name_hint, normalize, ocr_check, reread, reread_name
 from app.pipeline.reason_texts import FORM_REASON_TEXTS, REASON_TEXTS, SINGLE_READING, explain
 from app.schemas import (
     CENTRAL_DUPLICATE,
@@ -23,7 +23,8 @@ def _field_codes(module) -> set[str]:
             and value.islower() and not value.endswith(":") and value not in NOT_FIELD_CODES}
 
 
-@pytest.mark.parametrize("module", [extract, normalize, ocr_check, reread, classify], ids=lambda m: m.__name__)
+@pytest.mark.parametrize("module", [extract, normalize, ocr_check, reread, reread_name, name_hint, classify],
+                         ids=lambda m: m.__name__)
 def test_every_field_reason_code_has_a_text(module):
     assert _field_codes(module) - set(REASON_TEXTS) == set()
 

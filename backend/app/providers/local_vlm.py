@@ -31,7 +31,7 @@ from app.providers.common import (
     page_relation_from_output,
 )
 from app.providers.prompts import Prompts
-from app.schemas import FormClassification, FormReading, FormType, NumberReading, PageRelation
+from app.schemas import FormClassification, FormReading, FormType, NameReading, NameWording, NumberReading, PageRelation
 
 CHAT_PATH = "/api/chat"
 # Deterministic decoding: a reading should not change from one run to the next.
@@ -55,6 +55,10 @@ class LocalVlmProvider:
 
     def read_number(self, crop: np.ndarray) -> NumberReading:
         return number_from_output(self._chat_json([crop], self._prompts.read_number, NUMBER_SCHEMA))
+
+    def read_name(self, crop: np.ndarray, field_name: str, wording: NameWording) -> NameReading:
+        """Not offered: the name second look is Claude-only (``Settings`` refuses ``CE_NAME_REREAD`` here)."""
+        raise ProviderError("read_name is not supported by the local_vlm provider")
 
     def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:
         data = self._chat_json([p.image for p in pages], classify_instruction(form_types),

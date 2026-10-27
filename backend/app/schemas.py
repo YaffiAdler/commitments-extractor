@@ -56,6 +56,7 @@ class SignalSource(str, Enum):
     VLM = "vlm"        # the full-form extraction call
     OCR = "ocr"        # Tesseract on the field's crop (printed numbers only)
     REREAD = "reread"  # a second, narrow vision-model call on the enlarged crop
+    NAME_LIST = "name_list"  # names of a name list close to the value (a suggestion, not a reading)
 
 
 class FieldSignal(BaseModel):
@@ -68,6 +69,11 @@ class FieldSignal(BaseModel):
     confidence: Optional[float] = PydField(default=None, ge=0.0, le=1.0, description="OCR only")
     legible: Optional[bool] = None
     note: Optional[str] = None
+    # Name second look only: the variant of the reading, the model's ranked candidates (``value`` is the
+    # first) and the 0-based positions in ``value`` of the letters it marked as uncertain.
+    variant: Optional[str] = None
+    candidates: list[str] = PydField(default_factory=list)
+    uncertain: list[int] = PydField(default_factory=list)
 
 
 NOT_FOUND = "not_found"
@@ -220,6 +226,31 @@ class NumberReading(BaseModel):
     value: Optional[str] = None
 
 
+class NameWording(str, Enum):
+    """Which prompt ``ExtractionProvider.read_name`` is asked with (``backend/prompts/``)."""
+
+    STANDARD = "standard"  # read_name_<version>.md
+    LETTERS = "letters"    # read_name_letters_<version>.md: letter by letter, then joined
+
+
+class NameCandidate(BaseModel):
+    """One possible reading of a handwritten name."""
+
+    value: str
+    uncertain: list[int] = PydField(default_factory=list, description="0-based positions of uncertain letters")
+
+
+class NameReading(BaseModel):
+    """The answer of ``ExtractionProvider.read_name`` on one enlarged crop: up
+    to 3 candidates, most likely first; none if no name can be read."""
+
+    candidates: list[NameCandidate] = PydField(default_factory=list)
+
+    @property
+    def top(self) -> Optional[NameCandidate]:
+        return self.candidates[0] if self.candidates else None
+
+
 SPLIT_UNCERTAIN = "split_uncertain"
 FORM_TYPE_UNKNOWN = "form_type_unknown"
 EXTRACTION_FAILED = "extraction_failed"
@@ -345,7 +376,10 @@ class JobStatus(str, Enum):
 class Correction(BaseModel):
     """One manual correction of a field, kept as an audit trail. ``item`` is the
     list index for ``central_numbers`` / ``commitment_numbers`` (None otherwise).
-    ``previous_raw_value`` is patient data: never log it."""
+    ``previous_raw_value`` is patient data: never log it. The previous reasons,
+    confidence and review flag (codes and numbers, no values) say what the
+    pipeline thought before the reviewer decided: the name review records
+    (``app/evaluation/name_review.py``) are built from them."""
 
     group_id: str
     field: str
@@ -353,6 +387,9 @@ class Correction(BaseModel):
     corrected_at: datetime = PydField(default_factory=lambda: datetime.now(timezone.utc))
     previous_raw_value: Optional[str] = None
     previous_source: FieldSource = FieldSource.NONE
+    previous_reasons: list[str] = PydField(default_factory=list)
+    previous_confidence: Optional[float] = PydField(default=None, ge=0.0, le=1.0)
+    previous_needs_review: Optional[bool] = None
 
 
 class Job(BaseModel):

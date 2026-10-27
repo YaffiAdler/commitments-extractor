@@ -11,6 +11,7 @@ vi.mock('./api', async (importOriginal) => ({
   streamJob: vi.fn(),
   getJob: vi.fn(),
   getSenders: vi.fn(),
+  getReviewLevels: vi.fn(),
   correctField: vi.fn(),
   getCrop: vi.fn(),
   getPage: vi.fn(),
@@ -42,6 +43,12 @@ async function uploadOneFile() {
 
 beforeEach(() => {
   vi.mocked(api.getSenders).mockResolvedValue(['כללית'])
+  vi.mocked(api.getReviewLevels).mockResolvedValue({
+    glance_min_confidence: 0.9,
+    verify_below_confidence: 0.5,
+    must_verify_reasons: [],
+    show_confidence_percent: false,
+  })
   vi.mocked(api.uploadFiles).mockResolvedValue(job([], { status: 'pending' }))
   vi.mocked(api.streamJob).mockImplementation(async (_id, handlers) => {
     handlers.onProgress({ status: 'running', forms_total: 2, forms_done: 1 })

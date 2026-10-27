@@ -21,6 +21,7 @@ from app.access import OPEN_PATHS, AccessTokenMiddleware
 from app.body_limit import BodySizeLimitMiddleware
 from app.config import Settings
 from app.corrections import CorrectionError, apply_correction
+from app.evaluation.name_review import review_records, to_csv
 from app.events import stream_job_events
 from app.export.xlsx import write_xlsx
 from app.field_crops import CropUnavailableError, field_crop_png, form_page_jpeg
@@ -37,6 +38,7 @@ from app.pipeline.orchestrator import Orchestrator
 from app.providers import create_provider
 from app.providers.base import ExtractionProvider
 from app.rate_limit import HOUR_S, MINUTE_S, RateLimiter, RateLimitMiddleware, RateRule
+from app.review_levels import ReviewLevelConfig, review_level_config
 from app.runner import JobRunner
 from app.schemas import FormGroup, Job, JobStatus
 from app.storage import create_job_store
@@ -48,6 +50,8 @@ logger = logging.getLogger(__name__)
 
 EXPORT_FILE_NAME = "commitments.xlsx"
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+NAME_REVIEW_FILE_NAME = "name_review.csv"
+CSV_MEDIA_TYPE = "text/csv; charset=utf-8"
 # The methods the endpoints below use; the only non-simple header the frontend sends is the access token.
 CORS_METHODS = ("GET", "POST", "PATCH", "DELETE")
 CORS_HEADERS = ("Authorization",)
@@ -224,6 +228,11 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
         """The canonical sender names a corrected ``sender`` must be one of."""
         return sorted(sender_names)
 
+    @app.get("/review-levels")
+    def review_levels() -> ReviewLevelConfig:
+        """Thresholds and must-verify reason codes for the reviewer's per-field review level."""
+        return review_level_config(settings.review_levels)
+
     # A plain ``def``: FastAPI runs it in the thread pool, so the file write and
     # the store insert do not block the event loop.
     @app.post("/jobs", status_code=status.HTTP_201_CREATED)
@@ -263,6 +272,18 @@ def create_app(settings: Settings | None = None, provider: ExtractionProvider | 
             raise HTTPException(status.HTTP_409_CONFLICT, "job is not finished")
         out_path = write_xlsx(job, storage.output_path(job.id, EXPORT_FILE_NAME), settings.export)
         return FileResponse(out_path, media_type=XLSX_MEDIA_TYPE, filename=EXPORT_FILE_NAME)
+
+    @app.get("/jobs/{job_id}/name-review.csv")
+    def name_review(job_id: str) -> Response:
+        """The reviewers' work on name fields as letters and counts only, no names
+        (see ``app/evaluation/name_review.py``); only on a finished job."""
+        job = require_job(job_id)
+        if job.status is not JobStatus.DONE:
+            raise HTTPException(status.HTTP_409_CONFLICT, "job is not finished")
+        records = review_records(job)
+        logger.info("job %s name review export: %d records", job.id, len(records))
+        return Response(to_csv(records), media_type=CSV_MEDIA_TYPE,
+                        headers={"Content-Disposition": f'attachment; filename="{NAME_REVIEW_FILE_NAME}"'})
 
     @app.patch("/jobs/{job_id}/commitments/{commitment_id}/fields/{field}")
     def correct_field(job_id: str, commitment_id: str, field: str, body: FieldCorrectionRequest) -> Job:

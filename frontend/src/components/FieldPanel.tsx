@@ -1,8 +1,34 @@
 import { type KeyboardEvent, useCallback, useEffect, useId, useRef, useState } from 'react'
-import { type BBox, type FormGroup, IMAGE_GONE, type ImageResult, type Job, NO_BOX, correctField, getCrop, getPage } from '../api'
+import {
+  type BBox,
+  type FormGroup,
+  IMAGE_GONE,
+  type ImageResult,
+  type Job,
+  NO_BOX,
+  type ReviewLevelConfig,
+  correctField,
+  getCrop,
+  getPage,
+} from '../api'
 import { failureText } from '../messages'
-import { type FieldTarget, columnOf, correctionValue, displayValue, entryAt, pageNumbers } from '../review'
-import { Icon } from './Icon'
+import {
+  type FieldTarget,
+  REVIEW_LEVELS,
+  REVIEW_LEVEL_ORDER,
+  type ReviewLevel,
+  columnOf,
+  confidencePercent,
+  correctionValue,
+  displayValue,
+  entryAt,
+  isNameField,
+  levelCounts,
+  nameCandidates,
+  pageNumbers,
+  reviewLevel,
+} from '../review'
+import { Icon, type IconName } from './Icon'
 
 type Loaded = { state: 'loading' } | { state: 'image'; url: string } | { state: 'missing'; text: string } | { state: 'error'; text: string }
 
@@ -11,6 +37,8 @@ const MISSING_TEXT: Record<string, string> = {
   [NO_BOX]: 'למודל אין מיקום של השדה בעמוד',
 }
 const DEFAULT_MISSING_TEXT = 'אין תמונה לשדה הזה'
+// The text carries the level; the icon repeats it, so it never rests on colour alone.
+const LEVEL_ICONS: Record<ReviewLevel, IconName> = { glance: 'eye', careful: 'search', verify: 'alert' }
 const KEY_HELP: [string, string][] = [
   ['Enter', 'אישור ושמירה'],
   ['Tab', 'השדה הכתום הבא'],
@@ -72,11 +100,22 @@ function PageView({ loaded, bbox, title }: { loaded: Loaded; bbox: BBox | null; 
   )
 }
 
+function LevelBadge({ level }: { level: ReviewLevel }) {
+  return (
+    <span className={`level-badge ${level}`}>
+      <Icon name={LEVEL_ICONS[level]} size={16} />
+      {REVIEW_LEVELS[level].label}
+    </span>
+  )
+}
+
 interface Props {
   job: Job
   group: FormGroup
   target: FieldTarget
   senders: string[]
+  // Null while the thresholds are not loaded (or failed): no level is shown.
+  reviewLevels: ReviewLevelConfig | null
   onSaved: (job: Job, target: FieldTarget) => void
   // Move to the next (1) or previous (-1) field to review.
   onNavigate: (step: 1 | -1) => void
@@ -84,7 +123,7 @@ interface Props {
 }
 
 // Render with key={targetKey(target)}: opening another field starts a fresh panel.
-export function FieldPanel({ job, group, target, senders, onSaved, onNavigate, onClose }: Props) {
+export function FieldPanel({ job, group, target, senders, reviewLevels, onSaved, onNavigate, onClose }: Props) {
   const column = columnOf(target.field)
   const entry = entryAt(group, target)
   const field = entry?.field ?? null
@@ -93,6 +132,9 @@ export function FieldPanel({ job, group, target, senders, onSaved, onNavigate, o
   const title = target.item !== null && listCount > 1 ? `${column.header} ${target.item + 1}` : column.header
   const page = field?.bbox?.page ?? group.pages[0]
   const hasBox = field?.bbox != null
+  const level = reviewLevels && entry ? reviewLevel(entry, reviewLevels) : null
+  const percent = reviewLevels ? confidencePercent(field, reviewLevels) : null
+  const counts = reviewLevels ? levelCounts(group, reviewLevels) : null
 
   const { id: jobId } = job
   const { id: groupId } = group
@@ -118,8 +160,8 @@ export function FieldPanel({ job, group, target, senders, onSaved, onNavigate, o
     inputRef.current?.select()
   }, [])
 
-  async function save() {
-    const value = correctionValue(target.field, text)
+  async function save(input = text) {
+    const value = correctionValue(target.field, input)
     if (value === null) {
       setError(target.field === 'received_date' ? 'תאריך בפורמט DD/MM/YYYY (שנה בארבע ספרות)' : 'הערך לא יכול להיות ריק')
       return
@@ -155,6 +197,25 @@ export function FieldPanel({ job, group, target, senders, onSaved, onNavigate, o
       : entry?.review
         ? { text: 'לבדיקה', className: 'review' }
         : { text: 'תקין', className: 'ok' }
+  const nameField = isNameField(target.field)
+  const candidates = nameField && editable ? nameCandidates(field) : []
+
+  function choose(candidate: string) {
+    setText(candidate)
+    void save(candidate)
+  }
+
+  // Names: the crop sits right after the input, so the reviewer reads the handwriting beside the value.
+  const cropSection = (
+    <section>
+      <h3>חיתוך השדה</h3>
+      {crop.state === 'image' ? (
+        <img className="crop" src={crop.url} alt={`חיתוך של ${title}`} />
+      ) : (
+        <ImageState loaded={crop} />
+      )}
+    </section>
+  )
   const explanations = field?.explanations.length ? field.explanations : (field?.reasons ?? [])
 
   return (
@@ -172,6 +233,26 @@ export function FieldPanel({ job, group, target, senders, onSaved, onNavigate, o
         עמודים {pageNumbers(group.pages)}
         {field?.source === 'manual' && ' · הערך הוזן ידנית'}
       </p>
+
+      {counts && (
+        <div className="level-counts">
+          <p className="muted small">שדות בטופס לפי רמת בדיקה</p>
+          <ul aria-label="שדות בטופס לפי רמת בדיקה">
+            {REVIEW_LEVEL_ORDER.map((key) => (
+              <li key={key}>
+                <LevelBadge level={key} /> <span className="count">{counts[key]}</span>
+              </li>
+            ))}
+            <li>
+              <span className="level-badge manual">
+                <Icon name="check" size={16} />
+                תוקנו ידנית
+              </span>{' '}
+              <span className="count">{counts.manual}</span>
+            </li>
+          </ul>
+        </div>
+      )}
 
       <div className="edit">
         <label htmlFor={inputId}>ערך</label>
@@ -208,6 +289,20 @@ export function FieldPanel({ job, group, target, senders, onSaved, onNavigate, o
             אפשר לתקן רק אחרי שהעיבוד הסתיים
           </p>
         )}
+        {candidates.length > 0 && (
+          <div className="name-candidates">
+            <p className="muted small">קריאות אחרות של השם (לחיצה שומרת)</p>
+            <ul aria-label="קריאות אחרות של השם">
+              {candidates.map((candidate) => (
+                <li key={candidate}>
+                  <button type="button" disabled={saving} onClick={() => choose(candidate)}>
+                    <bdi>{candidate}</bdi>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {saving && <p className="muted">שומר…</p>}
         {error && (
           <p className="error" role="alert">
@@ -216,19 +311,28 @@ export function FieldPanel({ job, group, target, senders, onSaved, onNavigate, o
         )}
       </div>
 
-      <section>
-        <h3>כפי שנקרא מהטופס</h3>
-        {field?.raw_value ? (
-          <p className="raw-value">
-            <bdi dir={column.ltr ? 'ltr' : undefined}>{field.raw_value}</bdi>
-          </p>
-        ) : (
-          <p className="muted">לא נקרא ערך</p>
-        )}
-      </section>
+      {nameField && cropSection}
 
-      <section>
-        <h3>סיבות</h3>
+      <section className="review-level" aria-label="רמת בדיקה לפני אישור">
+        <h3>רמת בדיקה לפני אישור</h3>
+        {level ? (
+          <>
+            <p>
+              <LevelBadge level={level} />
+            </p>
+            <p className="muted small">{REVIEW_LEVELS[level].hint}</p>
+          </>
+        ) : field?.source === 'manual' ? (
+          <p className="muted small">הערך הוזן ידנית ואין בו עוד מה לבדוק</p>
+        ) : (
+          <p className="muted small">רמת הבדיקה אינה זמינה כרגע</p>
+        )}
+        {percent !== null && (
+          <p className="muted small">
+            ציון ביטחון (לא מכויל, אינו סיכוי לדיוק): <bdi dir="ltr">{percent}%</bdi>
+          </p>
+        )}
+        <h4>סיבות</h4>
         {explanations.length > 0 ? (
           <ul className="reasons">
             {explanations.map((text) => (
@@ -241,13 +345,17 @@ export function FieldPanel({ job, group, target, senders, onSaved, onNavigate, o
       </section>
 
       <section>
-        <h3>חיתוך השדה</h3>
-        {crop.state === 'image' ? (
-          <img className="crop" src={crop.url} alt={`חיתוך של ${title}`} />
+        <h3>כפי שנקרא מהטופס</h3>
+        {field?.raw_value ? (
+          <p className="raw-value">
+            <bdi dir={column.ltr ? 'ltr' : undefined}>{field.raw_value}</bdi>
+          </p>
         ) : (
-          <ImageState loaded={crop} />
+          <p className="muted">לא נקרא ערך</p>
         )}
       </section>
+
+      {!nameField && cropSection}
 
       <section>
         <h3>עמוד {page + 1}</h3>

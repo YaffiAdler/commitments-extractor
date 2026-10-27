@@ -1,5 +1,6 @@
 """The numeric values of a form and their crops, shared by the OCR
-cross-check (``ocr_check``) and the second look (``reread``)."""
+cross-check (``ocr_check``), the second look (``reread``) and the name
+second look (``reread_name``, with its own padding)."""
 from __future__ import annotations
 
 import re
@@ -34,8 +35,9 @@ def is_number_text(text: str) -> bool:
     return bool(_NUMBER_TEXT.fullmatch(text)) and bool(digits_of(text))
 
 
-def crop_field(bbox: BBox, pages: list[PageImage], for_ocr: bool) -> np.ndarray | None:
-    """The value's box plus ``CROP_PADDING_PX`` from its page: the binarized
+def crop_field(bbox: BBox, pages: list[PageImage], for_ocr: bool,
+               padding_px: int = CROP_PADDING_PX) -> np.ndarray | None:
+    """The value's box plus ``padding_px`` from its page: the binarized
     ``ocr_image`` (grayscale ``original`` if there is none) ``for_ocr``, else
     the colour ``original`` (for the model, never binarized). None if the page
     is not in the form, its released original is gone, or the crop is too small to read."""
@@ -50,14 +52,14 @@ def crop_field(bbox: BBox, pages: list[PageImage], for_ocr: bool) -> np.ndarray 
             return None
         if for_ocr:
             image = to_gray(image)
-    return crop_bbox(image, bbox)
+    return crop_bbox(image, bbox, padding_px)
 
 
-def crop_bbox(image: np.ndarray, bbox: BBox) -> np.ndarray | None:
-    """``bbox`` plus ``CROP_PADDING_PX`` from ``image`` (in ``original``
+def crop_bbox(image: np.ndarray, bbox: BBox, padding_px: int = CROP_PADDING_PX) -> np.ndarray | None:
+    """``bbox`` plus ``padding_px`` from ``image`` (in ``original``
     coordinates); None if the crop is outside the image or too small to read."""
     try:
-        crop = crop_box(image, bbox.x0, bbox.y0, bbox.x1, bbox.y1, CROP_PADDING_PX)
+        crop = crop_box(image, bbox.x0, bbox.y0, bbox.x1, bbox.y1, padding_px)
     except ValueError:
         return None
     return crop if min(crop.shape[:2]) >= MIN_CROP_EDGE_PX else None

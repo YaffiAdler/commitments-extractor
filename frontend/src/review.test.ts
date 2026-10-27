@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
+import type * as api from './api'
+import type { ReviewLevelConfig } from './api'
 import {
   cellEntries,
+  confidencePercent,
   correctionValue,
   displayValue,
   formFlags,
   groupNeedsReview,
+  levelCounts,
+  MAX_NAME_CHOICES,
+  nameCandidates,
   nextReviewTarget,
+  reviewLevel,
   reviewTargets,
   sortGroups,
   toIsoDate,
@@ -100,5 +107,96 @@ describe('values', () => {
     expect(correctionValue('id_number', '   ')).toBeNull()
     expect(correctionValue('id_number', ' 000000026 ')).toBe('000000026')
     expect(correctionValue('received_date', '04/01/2026')).toBe('2026-01-04')
+  })
+})
+
+describe('review levels', () => {
+  const config: ReviewLevelConfig = {
+    glance_min_confidence: 0.9,
+    verify_below_confidence: 0.5,
+    must_verify_reasons: ['ocr_disagrees', 'illegible'],
+    show_confidence_percent: false,
+  }
+  const levelOf = (f: ReturnType<typeof field>) =>
+    reviewLevel({ target: { groupId: 'g', field: 'id_number', item: null }, field: f, review: f.needs_review }, config)
+
+  it('asks only a quick glance for a high score that is not flagged', () => {
+    expect(levelOf(field('000000018', false, { confidence: 0.9 }))).toBe('glance')
+  })
+
+  it('asks to check carefully between the thresholds, or when the confidence stage flagged it', () => {
+    expect(levelOf(field('000000018', true, { confidence: 0.55, reasons: ['handwritten', 'single_reading'] }))).toBe('careful')
+    expect(levelOf(field('000000018', false, { confidence: 0.89 }))).toBe('careful')
+    expect(levelOf(field('000000018', true, { confidence: 0.95 }))).toBe('careful')
+  })
+
+  it('asks to verify below the lower threshold', () => {
+    expect(levelOf(field('000000018', true, { confidence: 0.49 }))).toBe('verify')
+    expect(levelOf(field('000000018', true, { confidence: 0.5 }))).toBe('careful')
+  })
+
+  it('asks to verify on a must-verify signal, whatever the score', () => {
+    expect(levelOf(field('000000018', false, { confidence: 1, reasons: ['ocr_disagrees'] }))).toBe('verify')
+  })
+
+  it('asks to verify a missing value, and only a glance for a missing optional one', () => {
+    expect(levelOf(field(null))).toBe('verify')
+    const optional = group({ commitment: commitment({ commitment_numbers: [], optional_fields: ['commitment_numbers'] }) })
+    expect(reviewLevel(cellEntries(optional, 'commitment_numbers')[0], config)).toBe('glance')
+  })
+
+  it('has no level once corrected by hand', () => {
+    expect(levelOf(field('000000026', false, { source: 'manual', confidence: 1 }))).toBeNull()
+  })
+
+  it('counts the entries of one form per level, list items each', () => {
+    const g = group({
+      commitment: commitment({
+        first_name: field('יוסף', true, { confidence: 0.55 }),
+        id_number: field('000000018', true, { confidence: 0.3 }),
+        received_date: field(null),
+        sender: field('כללית', false, { source: 'manual' }),
+        central_numbers: [field('123456'), field('654321', true, { confidence: 0.8 })],
+      }),
+    })
+    // glance: last_name, central 1, commitment 1; careful: first_name, central 2; verify: id, date.
+    expect(levelCounts(g, config)).toEqual({ verify: 2, careful: 2, glance: 3, manual: 1 })
+  })
+
+  it('gives a percentage only when the setting allows it', () => {
+    const f = field('000000018', true, { confidence: 0.554 })
+    expect(confidencePercent(f, config)).toBeNull()
+    const shown = { ...config, show_confidence_percent: true }
+    expect(confidencePercent(f, shown)).toBe(55)
+    expect(confidencePercent(field(null), shown)).toBeNull()
+    expect(confidencePercent(field('1', false, { source: 'manual' }), shown)).toBeNull()
+  })
+})
+
+describe('name candidates', () => {
+  const reading = (value: string | null, candidates: string[], variant: string | null = 'wide'): api.FieldSignal => ({
+    source: 'reread',
+    value,
+    variant,
+    candidates,
+    uncertain: [],
+  })
+
+  it('ranks the second look readings by support and leaves out the current value', () => {
+    const name = field('רוד', true, {
+      signals: [reading('דוד', ['דוד', 'רוד']), reading('דוד', ['דוד', 'דור']), reading('רוד', ['רוד', 'דוב'], 'letters')],
+    })
+    expect(nameCandidates(name)).toEqual(['דוד', 'דור', 'דוב'])
+  })
+
+  it('ignores signals of other stages, empty readings and an empty field', () => {
+    const ocr = { ...reading('123', []), source: 'ocr' as const, variant: null }
+    expect(nameCandidates(field('דוד', true, { signals: [ocr, reading(null, [])] }))).toEqual([])
+    expect(nameCandidates(null)).toEqual([])
+  })
+
+  it('offers at most a few choices', () => {
+    const many = field('א', true, { signals: [reading('ב', ['ב', 'ג', 'ד']), reading('ה', ['ה', 'ו', 'ז'])] })
+    expect(nameCandidates(many)).toHaveLength(MAX_NAME_CHOICES)
   })
 })
