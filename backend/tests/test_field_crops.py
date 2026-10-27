@@ -33,6 +33,15 @@ def test_crop_is_the_padded_box(images):
     assert Image.open(io.BytesIO(png)).size == (60, 40)
 
 
+def test_a_name_crop_is_wider_than_its_box(images):
+    box = BBox(page=0, x0=20, y0=30, x1=60, y1=50)
+    group = _group(box)
+    group.commitment.first_name = Field[str](value="דוד", bbox=box)
+    name = Image.open(io.BytesIO(field_crop_png(images, JOB_ID, group, "first_name", None))).size
+    number = Image.open(io.BytesIO(field_crop_png(images, JOB_ID, group, "id_number", None))).size
+    assert name[0] > number[0]
+
+
 @pytest.mark.parametrize(("bbox", "name", "code"), [
     (None, "id_number", NO_BOX),
     (BBox(page=0, x0=500, y0=500, x1=600, y1=600), "id_number", NO_BOX),

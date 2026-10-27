@@ -151,6 +151,10 @@ class ConfidenceSettings:
     ocr_disagreement: float = field(default_factory=lambda: _env_float("confidence_ocr_disagreement", "0.3"))
     second_reading_disagreement: float = field(
         default_factory=lambda: _env_float("confidence_second_reading_disagreement", "0.3"))
+    # Added per agreeing reading beyond the first, when every extra reading of a name agrees (name second look).
+    # Low on purpose: at 0.05 a handwritten name tops out at 0.8 (always reviewed); 0.1 with 3 variants reaches 0.9.
+    additional_reading_agreement: float = field(
+        default_factory=lambda: _env_float("confidence_additional_reading_agreement", "0.05"))
     # Subtracted once per failed validation rule.
     hard_fail: float = field(default_factory=lambda: _env_float("confidence_hard_fail", "0.3"))
     soft_fail: float = field(default_factory=lambda: _env_float("confidence_soft_fail", "0.1"))
@@ -162,6 +166,64 @@ class ConfidenceSettings:
         for name, value in vars(self).items():
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"confidence {name} must be between 0 and 1")
+
+
+@dataclass(frozen=True)
+class ReviewLevelSettings:
+    """How much checking the review screen asks for per field (``app/review_levels.py``): "quick glance",
+    "check carefully" or "must verify". The confidence score is not calibrated, so these are review levels,
+    not accuracy; like the weights they are hand-chosen until there is ground truth.
+    """
+
+    # A value at or above this score (and not flagged by the confidence stage) needs only a quick glance.
+    glance_min_confidence: float = field(default_factory=lambda: _env_float("review_level_glance_min", "0.9"))
+    # A value below this score must be verified against the form, as must one with a must-verify signal.
+    verify_below_confidence: float = field(default_factory=lambda: _env_float("review_level_verify_below", "0.5"))
+    # Also show the raw score as a percentage. Off by default: it is not a probability of being right.
+    show_confidence_percent: bool = field(default_factory=lambda: _env_bool("show_confidence_percent", False))
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.verify_below_confidence <= self.glance_min_confidence <= 1.0:
+            raise ValueError("review levels need 0 <= verify_below <= glance_min <= 1")
+
+
+class NameVariant(str, Enum):
+    """One extra reading of a name (``app/pipeline/reread_name.py``): a different input or prompt each,
+    since the models are not sampled."""
+
+    WIDE = "wide"        # wide padding around the name, colour
+    NARROW = "narrow"    # narrow padding, colour
+    INK = "ink"          # wide padding, handwriting separated from the printed form (``imaging/ink.py``)
+    LETTERS = "letters"  # wide padding, colour, the letter-by-letter prompt
+
+
+# Extra readings per name at most (2 name fields -> at most 6 extra calls per form).
+MAX_NAME_VARIANTS = 3
+DEFAULT_NAME_VARIANTS = (NameVariant.WIDE, NameVariant.LETTERS)
+
+
+def _name_variants() -> tuple[NameVariant, ...]:
+    return tuple(NameVariant(item) for item in _env_list("name_reread_variants")) or DEFAULT_NAME_VARIANTS
+
+
+@dataclass(frozen=True)
+class NameRereadSettings:
+    """The focused second look at names, handwritten and printed (``app/pipeline/reread_name.py``). Off by default
+    until the name evaluation (docs/handwriting_eval.md) shows that it helps."""
+
+    enabled: bool = field(default_factory=lambda: _env_bool("name_reread", False))
+    # Comma-separated ``NameVariant`` values, one extra reading (provider call) per name each.
+    variants: tuple[NameVariant, ...] = field(default_factory=_name_variants)
+
+    def __post_init__(self) -> None:
+        if not 1 <= len(self.variants) <= MAX_NAME_VARIANTS:
+            raise ValueError(f"name reread variants must be 1 to {MAX_NAME_VARIANTS}")
+        if len(set(self.variants)) != len(self.variants):
+            raise ValueError("name reread variants must not repeat")
+
+
+# Providers that implement ``read_name`` (Claude only; fake for tests).
+NAME_REREAD_PROVIDERS = frozenset({ProviderName.CLAUDE, ProviderName.FAKE})
 
 
 def _segment_weight(name: str, default: str) -> float:
@@ -310,8 +372,10 @@ class Settings:
     preprocess: PreprocessSettings = field(default_factory=PreprocessSettings)
     extraction: ExtractionSettings = field(default_factory=ExtractionSettings)
     confidence: ConfidenceSettings = field(default_factory=ConfidenceSettings)
+    review_levels: ReviewLevelSettings = field(default_factory=ReviewLevelSettings)
     segment: SegmentSettings = field(default_factory=SegmentSettings)
     export: ExportSettings = field(default_factory=ExportSettings)
+    name_reread: NameRereadSettings = field(default_factory=NameRereadSettings)
     # Empty = find ``tesseract`` on PATH.
     tesseract_cmd: str = field(default_factory=lambda: _env("tesseract_cmd", ""))
     ocr_languages: str = field(default_factory=lambda: _env("ocr_languages", "heb+eng"))
@@ -342,6 +406,8 @@ class Settings:
             raise ValueError("segment weight vlm must stay below review_threshold")
         if self.lab_match_margin_days < 0:
             raise ValueError("lab_match_margin_days must not be negative")
+        if self.name_reread.enabled and self.provider not in NAME_REREAD_PROVIDERS:
+            raise ValueError(f"{ENV_PREFIX}NAME_REREAD needs provider claude (or fake), not {self.provider.value}")
         if self.log_level not in LOG_LEVELS:
             raise ValueError(f"log_level must be one of {', '.join(LOG_LEVELS)}")
         self._check_demo_protection()

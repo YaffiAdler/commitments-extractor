@@ -9,10 +9,15 @@ earlier stages left in ``Field.reasons``:
   closed list (the sender);
 * agreement or disagreement of OCR (``ocr_agrees`` / ``ocr_disagrees``);
 * agreement or disagreement of a second reading (``reread_*`` for numbers,
-  ``sender_readings_*`` for the sender);
+  ``sender_readings_*`` for the sender, ``name_readings_*`` for names), and
+  for names each further agreeing reading (``additional_agreements``);
 * failed validation rules, hard or soft (``HARD_FAIL_REASONS`` /
   ``SOFT_FAIL_REASONS``; the check digit of an ID is soft only);
 * ``illegible`` (the model saw only part of the value).
+
+The name list hint (``name_in_list`` / ``name_list_suggestion``) is
+deliberately not a signal here: a name that is in no list must not score
+lower.
 
 ``WeightedScorer`` adds them up with the weights in
 ``config.ConfidenceSettings`` and clips to [0, 1]. A ``Scorer`` is the
@@ -22,7 +27,8 @@ used through ``ProbabilityModelScorer`` without changing this stage.
 
 ``needs_review`` is set when the score is below the review threshold, or
 when the value is illegible (a partial value is never accepted, whatever the
-weights). An empty field is always flagged with confidence 0, unless the form
+weights), or when the name second look filled it in
+(``name_filled_from_second_look``, also a soft fail). An empty field is always flagged with confidence 0, unless the form
 type's YAML marks it ``optional`` (``optional_missing``). Every field also
 gets ``explanations``: its reasons as Hebrew text for the reviewer.
 """
@@ -34,7 +40,7 @@ from enum import Enum
 from typing import Protocol
 
 from app.config import ConfidenceSettings
-from app.pipeline import classify, extract, normalize, ocr_check, reread
+from app.pipeline import classify, extract, normalize, ocr_check, reread, reread_name
 from app.pipeline.reason_texts import SINGLE_READING, explain
 from app.schemas import COMMITMENT_FIELDS, OPTIONAL_MISSING, Commitment, Field, FieldSource, FormType
 
@@ -53,9 +59,16 @@ HARD_FAIL_REASONS = frozenset({
 SOFT_FAIL_REASONS = frozenset({
     normalize.ID_CHECKSUM_FAILED, normalize.ID_PADDED, normalize.DATE_TWO_DIGIT_YEAR, normalize.DATE_IN_FUTURE,
     normalize.DATE_BEFORE_WINDOW, normalize.COMMITMENT_PATTERN_MISMATCH, classify.SENDER_FUZZY_MATCH,
+    reread_name.NAME_UNCERTAIN_LETTERS, reread_name.NAME_FILLED_FROM_SECOND_LOOK,
 })
-SECOND_READING_AGREES = frozenset({reread.REREAD_AGREES, classify.SENDER_READINGS_AGREE})
-SECOND_READING_DISAGREES = frozenset({reread.REREAD_DISAGREES, classify.SENDER_READINGS_DISAGREE})
+SECOND_READING_AGREES = frozenset({reread.REREAD_AGREES, classify.SENDER_READINGS_AGREE,
+                                   reread_name.NAME_READINGS_AGREE})
+SECOND_READING_DISAGREES = frozenset({reread.REREAD_DISAGREES, classify.SENDER_READINGS_DISAGREE,
+                                      reread_name.NAME_READINGS_DISAGREE})
+# A field with any of these must be verified against the form whatever its score: an independent
+# reading disagreed, a hard rule failed, the value is partial or came only from the name second look.
+MUST_VERIFY_REASONS = (HARD_FAIL_REASONS | SECOND_READING_DISAGREES
+                       | {ocr_check.OCR_DISAGREES, extract.ILLEGIBLE, reread_name.NAME_FILLED_FROM_SECOND_LOOK})
 
 
 class FieldKind(str, Enum):
@@ -76,6 +89,10 @@ class FieldSignals:
     hard_fails: int = 0
     soft_fails: int = 0
     illegible: bool = False
+    # Agreeing readings beyond the first, when every extra reading of a name agreed.
+    additional_agreements: int = 0
+    # The extract call read nothing; the name second look supplied the value.
+    filled_by_second_look: bool = False
 
     @classmethod
     def of(cls, field_: Field, kind: FieldKind) -> FieldSignals:
@@ -89,6 +106,8 @@ class FieldSignals:
             hard_fails=len(reasons & HARD_FAIL_REASONS),
             soft_fails=len(reasons & SOFT_FAIL_REASONS),
             illegible=extract.ILLEGIBLE in reasons,
+            additional_agreements=_additional_agreements(field_, reasons),
+            filled_by_second_look=reread_name.NAME_FILLED_FROM_SECOND_LOOK in reasons,
         )
 
     @property
@@ -104,6 +123,13 @@ class FieldSignals:
     @staticmethod
     def feature_names() -> list[str]:
         return [f"kind_{option.value}" for option in FieldKind] + [f.name for f in fields(FieldSignals)[1:]]
+
+
+def _additional_agreements(field_: Field, reasons: set[str]) -> int:
+    """Name second look: every one of its readings agreed, so all but the first count extra."""
+    if reread_name.NAME_READINGS_AGREE not in reasons:
+        return 0
+    return max(0, sum(signal.variant is not None for signal in field_.signals) - 1)
 
 
 class Scorer(Protocol):
@@ -131,6 +157,7 @@ class WeightedScorer:
             + w.ocr_agreement * signals.ocr_agrees
             - w.ocr_disagreement * signals.ocr_disagrees
             + w.second_reading_agreement * signals.second_agrees
+            + w.additional_reading_agreement * signals.additional_agreements
             - w.second_reading_disagreement * signals.second_disagrees
             - w.hard_fail * signals.hard_fails
             - w.soft_fail * signals.soft_fails
@@ -182,7 +209,8 @@ def score_field(field_: Field, kind: FieldKind, scorer: Scorer, review_threshold
     if not signals.compared and SINGLE_READING not in reasons:
         reasons.append(SINGLE_READING)
     confidence = scorer.score(signals)
-    return field_.revalidated(confidence=confidence, needs_review=confidence < review_threshold or signals.illegible,
+    always_review = signals.illegible or signals.filled_by_second_look
+    return field_.revalidated(confidence=confidence, needs_review=confidence < review_threshold or always_review,
                               reasons=reasons, explanations=explain(reasons))
 
 

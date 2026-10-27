@@ -10,7 +10,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 from app.pipeline.ingest import PageImage
-from app.schemas import FormClassification, FormReading, FormType, NumberReading, PageRelation
+from app.schemas import FormClassification, FormReading, FormType, NameReading, NameWording, NumberReading, PageRelation
 
 
 class ProviderError(RuntimeError):
@@ -39,6 +39,14 @@ class ExtractionProvider(Protocol):
     def read_number(self, crop: np.ndarray) -> NumberReading:
         """Read the number on one enlarged crop (a second look at a single
         value): digits only, or None if no number can be read with certainty."""
+        ...
+
+    def read_name(self, crop: np.ndarray, field_name: str, wording: NameWording) -> NameReading:
+        """Read the handwritten name (``first_name`` or ``last_name``) on one
+        enlarged crop, asked in ``wording``: up to 3 candidates, most likely
+        first, with uncertain letters marked; none if no name can be read.
+        Nothing is completed or corrected. Only Claude (and the fake) implement
+        it; the others raise ``ProviderError``."""
         ...
 
     def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:

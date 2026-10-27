@@ -7,6 +7,7 @@ import {
   type Job,
   type JobProgress,
   type ListFieldName,
+  type ReviewLevelConfig,
   LIST_FIELDS,
 } from './api'
 
@@ -117,6 +118,48 @@ export const formFlags = (group: FormGroup): FormFlag[] =>
 export const groupNeedsReview = (group: FormGroup): boolean =>
   formFlags(group).length > 0 || COLUMNS.some((c) => cellEntries(group, c.key).some((e) => e.review))
 
+// --- Review levels (thresholds and codes from backend config.ReviewLevelSettings) ---
+
+// How much checking a value needs before it is approved. Derived from the score and the
+// signals; the score is not calibrated, so it is never presented as accuracy.
+export type ReviewLevel = 'glance' | 'careful' | 'verify'
+
+// Most work first: the order of the per-form counts.
+export const REVIEW_LEVEL_ORDER: ReviewLevel[] = ['verify', 'careful', 'glance']
+
+export const REVIEW_LEVELS: Record<ReviewLevel, { label: string; hint: string }> = {
+  glance: { label: 'מבט מהיר', hint: 'קריאות בלתי תלויות תומכות בערך; מספיק להשוות במבט לחיתוך' },
+  careful: { label: 'לבדוק בעיון', hint: 'לערך אין אישור מלא; השוו אותו לחיתוך לפני האישור' },
+  verify: { label: 'חובה לאמת', hint: 'הערך חסר או שיש סימן לבעיה בו; אמתו מול הטופס לפני האישור' },
+}
+
+// The level of one entry; null once the reviewer corrected it (nothing left to check).
+// An empty entry is "verify" when flagged and "glance" when the field is optional.
+export function reviewLevel(entry: CellEntry, config: ReviewLevelConfig): ReviewLevel | null {
+  const { field } = entry
+  if (field?.source === 'manual') return null
+  if (field === null || field.value === null) return entry.review ? 'verify' : 'glance'
+  const mustVerify = field.reasons.some((code) => config.must_verify_reasons.includes(code))
+  if (mustVerify || field.confidence < config.verify_below_confidence) return 'verify'
+  if (entry.review || field.confidence < config.glance_min_confidence) return 'careful'
+  return 'glance'
+}
+
+export type LevelCounts = Record<ReviewLevel | 'manual', number>
+
+// Entries of one form per level (list items count one each), plus those corrected by hand.
+export function levelCounts(group: FormGroup, config: ReviewLevelConfig): LevelCounts {
+  const counts: LevelCounts = { verify: 0, careful: 0, glance: 0, manual: 0 }
+  for (const entry of allEntries([group])) counts[reviewLevel(entry, config) ?? 'manual'] += 1
+  return counts
+}
+
+// The raw score as a whole percentage, only behind its off-by-default setting; null otherwise.
+export function confidencePercent(field: Field | null, config: ReviewLevelConfig): number | null {
+  if (!config.show_confidence_percent || field?.value == null || field.source === 'manual') return null
+  return Math.round(field.confidence * 100)
+}
+
 // --- Rows -------------------------------------------------------------------------
 
 // Forms in file order (as uploaded), then page order.
@@ -139,6 +182,28 @@ export const progressOf = (job: Job): JobProgress => ({
 })
 
 // Pages are 0-based in the API and 1-based for the reader.
+export const NAME_FIELDS: FieldName[] = ['first_name', 'last_name']
+export const isNameField = (name: FieldName) => NAME_FIELDS.includes(name)
+export const MAX_NAME_CHOICES = 4
+
+// The name second look's readings other than the current value, for one-click choices:
+// ranked by how many readings give each (then by first appearance), at most MAX_NAME_CHOICES.
+export function nameCandidates(field: Field | null): string[] {
+  if (!field) return []
+  const support = new Map<string, number>()
+  for (const signal of field.signals) {
+    if (signal.variant === null) continue
+    const names = new Set([signal.value, ...signal.candidates].map((name) => name?.trim()).filter(Boolean) as string[])
+    for (const name of names) support.set(name, (support.get(name) ?? 0) + 1)
+  }
+  const current = field.value?.trim()
+  return [...support.entries()]
+    .filter(([name]) => name !== current)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_NAME_CHOICES)
+    .map(([name]) => name)
+}
+
 export const pageNumbers = (pages: number[]) => pages.map((p) => p + 1).join(', ')
 
 // --- Values -----------------------------------------------------------------------

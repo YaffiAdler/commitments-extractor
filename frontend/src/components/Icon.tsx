@@ -7,6 +7,9 @@ const PATHS = {
   file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zm0 0v5h5',
   check: 'M5 12.5l4.5 4.5L19 7.5',
   table: 'M4 5h16v14H4zM4 10h16M4 15h16M10 5v14',
+  eye: 'M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12zm9.5 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6',
+  search: 'M10.5 17.5a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4.5-4.5',
+  alert: 'M12 3.5 2.5 20h19zM12 10v4.5M12 17v.5',
 } as const
 
 export type IconName = keyof typeof PATHS

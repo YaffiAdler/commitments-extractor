@@ -4,7 +4,7 @@ import asyncio
 from datetime import date
 
 from form_fakes import LineOcr, blank_page, value_box
-from app.config import ConfidenceSettings, ExtractionSettings, Settings
+from app.config import ConfidenceSettings, ExtractionSettings, NameRereadSettings, NameVariant, Settings
 from app.pipeline.calls import ProviderCalls
 from app.pipeline.classify import (
     SENDER_READINGS_AGREE,
@@ -19,18 +19,21 @@ from app.pipeline.ocr_check import OCR_AGREES, OCR_DISAGREES
 from app.pipeline.read_form import FormReader
 from app.pipeline.reason_texts import REASON_TEXTS, SINGLE_READING
 from app.pipeline.reread import REREAD_AGREES, REREAD_DISAGREES
+from app.pipeline.reread_name import NAME_READINGS_AGREE
 from app.providers import fake
 from app.providers.fake import FakeProvider
-from app.schemas import FieldReading, FormGroup, FormReading, SignalSource
+from app.schemas import FieldReading, FormGroup, FormReading, NameCandidate, NameReading, SignalSource
 
 CALLS = ExtractionSettings(concurrency=2, call_timeout_s=5, max_attempts=1, backoff_initial_s=0, backoff_max_s=0)
 
 
-def _read(provider: FakeProvider, ocr=None, confidence: ConfidenceSettings | None = None) -> tuple[FormGroup, int]:
+def _read(provider: FakeProvider, ocr=None, confidence: ConfidenceSettings | None = None,
+          name_reread: NameRereadSettings | None = None) -> tuple[FormGroup, int]:
     settings = Settings()
     reader = FormReader(provider, load_form_types(settings.form_types_dir),
                         load_generic_form_type(settings.form_types_dir),
-                        SenderMatcher(load_senders(settings.senders_path)), ocr, confidence_settings=confidence)
+                        SenderMatcher(load_senders(settings.senders_path)), ocr, confidence_settings=confidence,
+                        name_reread=name_reread)
     group = FormGroup(source_file="f.pdf", pages=[0])
 
     async def main():
@@ -155,3 +158,30 @@ def test_classification_is_kept_on_the_form():
         fake.FAKE_FORM_TYPE_ID, True, fake.FAKE_SENDER_RAW, "matched")
     assert result.sender_score > 0
     assert result.sender_candidates[0].name == "כללית"
+
+
+def _handwritten_name_form() -> FormReading:
+    reading = fake.default_reading()
+    reading.first_name = FieldReading(value="משה", bbox=value_box(top=0.5), source="handwritten")
+    reading.last_name = FieldReading()  # not on the form: not read again
+    return reading
+
+
+def test_name_second_look_is_off_by_default():
+    provider = FakeProvider(reading=_handwritten_name_form())
+    group, count = _read(provider)
+    assert count == 2 and provider.name_requests == []
+    assert SINGLE_READING in group.commitment.first_name.reasons
+
+
+def test_name_second_look_when_enabled_is_scored_but_still_reviewed():
+    answer = NameReading(candidates=[NameCandidate(value="משה")])
+    provider = FakeProvider(reading=_handwritten_name_form(), names=[answer, answer])
+    group, count = _read(provider, name_reread=NameRereadSettings(
+        enabled=True, variants=(NameVariant.WIDE, NameVariant.LETTERS)))
+    first = group.commitment.first_name
+    assert count == 4 and len(provider.name_requests) == 2  # classify + extract + 2 name readings
+    assert first.value == "משה" and NAME_READINGS_AGREE in first.reasons
+    assert first.confidence == 0.75 and first.needs_review  # 0.55 + 0.15 + 0.05, below 0.9
+    assert REASON_TEXTS[NAME_READINGS_AGREE] in first.explanations
+

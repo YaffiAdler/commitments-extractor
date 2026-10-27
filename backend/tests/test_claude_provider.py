@@ -13,6 +13,7 @@ from app.pipeline.classify import load_form_types
 from app.providers.claude import API_KEY_ENV, ClaudeProvider
 from app.providers.common import FORM_READING_SCHEMA
 from app.providers.prompts import Prompts
+from app.schemas import NameWording
 
 
 def _reading(value, **extra) -> dict:
@@ -266,3 +267,20 @@ def test_request_refused_before_sending_is_not_retryable(api_key):
     with pytest.raises(ProviderError, match="LocalProtocolError") as info:
         _provider(handler).extract_form([_page()], None)
     assert not isinstance(info.value, RetryableProviderError)
+
+
+def test_read_name_sends_one_crop_with_the_name_prompt_and_parses_candidates(api_key):
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        content = body["messages"][0]["content"]
+        assert [block["type"] for block in content] == ["image", "text"]
+        assert content[-1]["text"] == Prompts.load().read_name("last_name", NameWording.LETTERS)
+        schema = body["output_config"]["format"]["schema"]
+        assert "temperature" not in body
+        assert schema["properties"]["candidates"]["items"]["additionalProperties"] is False
+        return httpx.Response(200, json=_answer({"candidates": [{"value": "כהן", "marked": "כה[ן]"},
+                                                                {"value": "כהו", "marked": "כה[ו]"}]}))
+
+    reading = _provider(handler).read_name(np.zeros((20, 60, 3), np.uint8), "last_name", NameWording.LETTERS)
+    assert [c.value for c in reading.candidates] == ["כהן", "כהו"]
+    assert reading.top.uncertain == [2]

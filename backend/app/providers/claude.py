@@ -25,6 +25,7 @@ from app.providers.common import (
     COMPARE_PAGES_INSTRUCTION,
     FORM_READING_SCHEMA,
     JPEG_MEDIA_TYPE,
+    NAME_SCHEMA,
     NUMBER_SCHEMA,
     PAGE_RELATION_SCHEMA,
     SYSTEM_PROMPT,
@@ -34,12 +35,13 @@ from app.providers.common import (
     form_classification_from_output,
     form_classification_schema,
     form_reading_from_output,
+    name_from_output,
     number_from_output,
     page_relation_from_output,
 )
 from app.providers.diagnostics import exception_chain, inspect_base64_image
 from app.providers.prompts import Prompts
-from app.schemas import FormClassification, FormReading, FormType, NumberReading, PageRelation
+from app.schemas import FormClassification, FormReading, FormType, NameReading, NameWording, NumberReading, PageRelation
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +148,9 @@ class ClaudeProvider:
 
     def read_number(self, crop: np.ndarray) -> NumberReading:
         return number_from_output(self._generate_json([crop], self._prompts.read_number, NUMBER_SCHEMA))
+
+    def read_name(self, crop: np.ndarray, field_name: str, wording: NameWording) -> NameReading:
+        return name_from_output(self._generate_json([crop], self._prompts.read_name(field_name, wording), NAME_SCHEMA))
 
     def classify(self, pages: list[PageImage], form_types: dict[str, FormType]) -> FormClassification:
         data = self._generate_json([p.image for p in pages], classify_instruction(form_types),

@@ -31,4 +31,8 @@ frontend/playwright-report/
 eval/report.md
 eval/classify_report.md
 eval/extract_report.md
+eval/name_report.md
+eval/name_review_report.md
+# name sets: dummy names, but real people's handwriting
+eval/name_sets/
 predictions.csv

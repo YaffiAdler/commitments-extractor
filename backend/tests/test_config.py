@@ -4,7 +4,9 @@ from app.config import (
     DEFAULT_EXPORT_COLUMNS,
     ConfidenceSettings,
     MultiValueMode,
+    NameVariant,
     ProviderName,
+    ReviewLevelSettings,
     SegmentSettings,
     Settings,
     StorageName,
@@ -73,6 +75,27 @@ def test_confidence_weights_from_env(monkeypatch):
 def test_confidence_weights_must_be_in_range(name):
     with pytest.raises(ValueError):
         ConfidenceSettings(**{name: 1.5})
+
+
+def test_review_level_defaults_hide_the_score():
+    levels = Settings().review_levels
+    assert (levels.glance_min_confidence, levels.verify_below_confidence) == (0.9, 0.5)
+    assert levels.show_confidence_percent is False
+
+
+def test_review_levels_from_env(monkeypatch):
+    monkeypatch.setenv("CE_REVIEW_LEVEL_GLANCE_MIN", "0.95")
+    monkeypatch.setenv("CE_REVIEW_LEVEL_VERIFY_BELOW", "0.4")
+    monkeypatch.setenv("CE_SHOW_CONFIDENCE_PERCENT", "1")
+    levels = Settings().review_levels
+    assert (levels.glance_min_confidence, levels.verify_below_confidence, levels.show_confidence_percent) == (
+        0.95, 0.4, True)
+
+
+@pytest.mark.parametrize("glance, verify", [(0.5, 0.6), (1.5, 0.5), (0.9, -0.1)])
+def test_review_levels_must_be_ordered_and_in_range(glance, verify):
+    with pytest.raises(ValueError):
+        ReviewLevelSettings(glance_min_confidence=glance, verify_below_confidence=verify)
 
 
 def test_allowed_origins_default_empty(monkeypatch):
@@ -216,3 +239,34 @@ def test_negative_rate_settings_rejected(monkeypatch, name):
     monkeypatch.setenv(name, "-1")
     with pytest.raises(ValueError):
         Settings()
+
+
+def test_name_reread_is_off_by_default_with_two_variants():
+    settings = Settings()
+    assert settings.name_reread.enabled is False
+    assert settings.name_reread.variants == (NameVariant.WIDE, NameVariant.LETTERS)
+    assert settings.confidence.additional_reading_agreement == 0.05
+
+
+def test_name_reread_from_env(monkeypatch):
+    monkeypatch.setenv("CE_NAME_REREAD", "1")
+    monkeypatch.setenv("CE_NAME_REREAD_VARIANTS", "ink, narrow,letters")
+    settings = Settings()
+    assert settings.name_reread.enabled
+    assert settings.name_reread.variants == (NameVariant.INK, NameVariant.NARROW, NameVariant.LETTERS)
+
+
+@pytest.mark.parametrize("variants", ["wide,wide", "wide,narrow,ink,letters", "sideways"])
+def test_invalid_name_variants_rejected(monkeypatch, variants):
+    monkeypatch.setenv("CE_NAME_REREAD_VARIANTS", variants)
+    with pytest.raises(ValueError):
+        Settings()
+
+
+@pytest.mark.parametrize("provider", ["gemini", "local_vlm"])
+def test_name_reread_needs_claude(monkeypatch, provider):
+    monkeypatch.setenv("CE_NAME_REREAD", "1")
+    monkeypatch.setenv("CE_PROVIDER", provider)
+    with pytest.raises(ValueError, match="CE_NAME_REREAD needs provider claude"):
+        Settings()
+

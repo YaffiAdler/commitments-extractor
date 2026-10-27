@@ -61,7 +61,7 @@ class Orchestrator:
         self._provider = provider
         self._form_types = form_types
         self._reader = FormReader(provider, form_types, generic_form_type, classify.SenderMatcher(senders), ocr,
-                                  confidence_settings=settings.confidence)
+                                  confidence_settings=settings.confidence, name_reread=settings.name_reread)
         self._ocr = ocr
         self._page_images = page_images
         self._ingest_limits = ingest.IngestLimits.from_settings(settings)

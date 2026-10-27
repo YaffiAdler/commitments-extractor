@@ -5,8 +5,8 @@ confidence 1 and no review flag, with the single reason ``manual_correction``.
 ``raw_value`` keeps the text as it was read from the form (None for an added
 list item or a field that was not found), and the box and earlier readings
 (``signals``) are kept too, so the crop and the history stay available. Every
-correction is also recorded in ``Job.corrections`` with the previous raw value
-and source. Values are patient data: the errors below never quote them.
+correction is also recorded in ``Job.corrections`` with the previous raw value,
+source, reasons, confidence and review flag. Values are patient data: the errors below never quote them.
 """
 from __future__ import annotations
 
@@ -76,6 +76,9 @@ def apply_correction(job: Job, group_id: str, name: str, value: str, item: int |
         group_id=group.id, field=name, item=item,
         previous_raw_value=previous.raw_value if previous else None,
         previous_source=previous.source if previous else FieldSource.NONE,
+        previous_reasons=list(previous.reasons) if previous else [],
+        previous_confidence=previous.confidence if previous else None,
+        previous_needs_review=previous.needs_review if previous else None,
     ))
     return group
 

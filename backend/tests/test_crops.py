@@ -35,3 +35,9 @@ def test_colour_crop_of_a_released_page_is_read_back():
     assert crop_field(bbox, [page.without_original(lambda: stored)], for_ocr=False).ndim == 3
     assert crop_field(bbox, [page.without_original(lambda: None)], for_ocr=False) is None
     assert crop_field(bbox, [page.without_original(lambda: None)], for_ocr=True) is not None  # ocr_image in memory
+
+
+def test_crop_padding_can_be_set():
+    bbox = BBox(page=0, x0=100, y0=100, x1=300, y1=140)
+    assert crop_field(bbox, [blank_page()], for_ocr=False, padding_px=0).shape[:2] == (40, 200)
+    assert crop_field(bbox, [blank_page()], for_ocr=False, padding_px=30).shape[:2] == (100, 260)

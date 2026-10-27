@@ -819,6 +819,70 @@ button.entry[aria-pressed='true'] {
   color: var(--teal-dark);
 }
 
+/* Review level: icon + text, the colour only repeats them. */
+.level-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.65rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.level-badge.verify {
+  background: var(--flag);
+  color: var(--danger);
+}
+
+.level-badge.careful {
+  background: var(--review-soft);
+  color: var(--review-strong);
+}
+
+.level-badge.glance {
+  background: var(--teal-tint);
+  color: var(--teal-dark);
+}
+
+.level-badge.manual {
+  background: var(--manual);
+  color: var(--manual-strong);
+}
+
+.review-level p {
+  margin: 0 0 0.4rem;
+}
+
+.review-level h4 {
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.level-counts {
+  margin-top: 0.75rem;
+}
+
+.level-counts p {
+  margin: 0 0 0.35rem;
+}
+
+.level-counts ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.level-counts .count {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
 .edit {
   margin-top: 1rem;
 }
@@ -1056,4 +1120,13 @@ body {
   margin: 0;
   padding-inline-start: 1.1rem;
   font-size: 0.9rem;
+}
+
+.name-candidates ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
 }

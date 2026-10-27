@@ -7,7 +7,7 @@ Hebrew; they describe the check, never the value.
 """
 from __future__ import annotations
 
-from app.pipeline import classify, extract, normalize, ocr_check, reread
+from app.pipeline import classify, extract, name_hint, normalize, ocr_check, reread, reread_name
 from app.schemas import (
     CENTRAL_DUPLICATE,
     EXTRACTION_FAILED,
@@ -52,6 +52,16 @@ REASON_TEXTS: dict[str, str] = {
     reread.REREAD_UNAVAILABLE: "לא ניתן היה לקרוא שנית (אין מיקום בדף)",
     reread.REREAD_FAILED: "הקריאה השנייה נכשלה",
     reread.REREAD_LIMIT: "לא נקרא שנית (הגעה למכסת הקריאות לטופס)",
+    reread_name.NAME_READINGS_AGREE: "כל הקריאות הנוספות של השם הסכימו עם הקריאה הראשונה",
+    reread_name.NAME_READINGS_DISAGREE: "השם נקרא אחרת באחת הקריאות הנוספות",
+    reread_name.NAME_REREAD_NULL: "באחת הקריאות הנוספות לא נקרא שם",
+    reread_name.NAME_FILLED_FROM_SECOND_LOOK: "השם לא נקרא בקריאה הראשונה; מוצג מקריאה נוספת, בביטחון נמוך",
+    reread_name.NAME_UNCERTAIN_LETTERS: "המודל סימן בשם אותיות שאינן ודאיות",
+    reread_name.NAME_REREAD_FALLBACK_BOX: "מיקום השם לא זוהה; הקריאה הנוספת נעשתה מאזור השם השני",
+    reread_name.NAME_REREAD_UNAVAILABLE: "לא ניתן היה לקרוא את השם שנית (אין מיקום בדף)",
+    reread_name.NAME_REREAD_FAILED: "קריאה נוספת של השם נכשלה",
+    name_hint.NAME_IN_LIST: "השם מופיע ברשימת השמות (מידע בלבד)",
+    name_hint.NAME_LIST_SUGGESTION: "ברשימת השמות יש שם הנבדל באות אחת; מוצע לבודק, לא הוזן",
     classify.SENDER_NOT_IN_LIST: "הגורם השולח אינו ברשימה הסגורה",
     classify.SENDER_AMBIGUOUS: "הגורם השולח מתאים ליותר מגורם אחד ברשימה",
     classify.SENDER_FUZZY_MATCH: "הגורם השולח הותאם לרשימה בהתאמה חלקית",

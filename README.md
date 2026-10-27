@@ -15,13 +15,18 @@ backend/app/schemas.py        data model (Pydantic v2)
 backend/app/pipeline/         one module per stage: ingest -> preprocess -> segment -> classify
                               -> extract -> ocr_check -> reread -> normalize -> confidence, wired by
                               orchestrator.py; read_form.py reads one form, calls.py runs provider
-                              calls (semaphore, retries, timeout), crops.py cuts single values
+                              calls (semaphore, retries, timeout), crops.py cuts single values;
+                              reread_name.py: opt-in extra readings of names; name_hint.py: name list hint (not wired yet)
 backend/app/imaging/          pure image operations used by preprocess (geometry, deskew,
                               perspective, illumination, orientation)
 backend/app/ocr/              OcrEngine Protocol (base.py) + Tesseract
 backend/app/providers/        ExtractionProvider Protocol (base.py) + claude / gemini / local_vlm / fake (shared schema/parsing in common.py, prompt files in prompts.py)
-backend/prompts/              versioned prompt files: extract_v1.md (template + YAML block), read_number_v1.md
+backend/prompts/              versioned prompt files: extract_v1.md (template + YAML block), read_number_v1.md,
+                              read_name_v1.md, read_name_letters_v1.md
 backend/app/export/xlsx.py    Excel export (columns and multi-value mode from config.ExportSettings)
+backend/app/hebrew_text.py    Hebrew text folding for comparing name readings (niqqud, quotes, final letters)
+backend/app/evaluation/       offline name evaluation: set format (name_set.py), metrics, report;
+                              name_review.py: reviewers' name corrections as letters and counts
 backend/app/storage/          JobStore Protocol (base.py) + memory / sqlite / postgres job stores (sql.py: shared SQL), tmp.py: temporary per-job files, page_images.py: page images for crops
 backend/form_types/*.yaml     one definition per observed form type (25 types) + generic.yaml (fallback)
 backend/data/senders.json     closed list of senders
@@ -32,19 +37,23 @@ frontend/src/api.ts           types mirroring schemas.py + every API call
 frontend/src/review.ts        pure review logic: cells, fields to review, Tab order, form flags, dates
 frontend/src/messages.ts      Hebrew texts for failed requests
 frontend/src/components/      UploadPanel (react-dropzone, SSE progress), ReviewTable (TanStack Table),
-                              FieldPanel (crop, page with the box, reasons, raw value, editing), ExportButton
+                              FieldPanel (crop, page with the box, reasons, raw value, editing, name candidates), ExportButton
 frontend/src/**/*.test.ts(x)  Vitest + Testing Library (jsdom)
 frontend/e2e/                 Playwright: upload -> correct an orange field -> download (fake provider)
 docs/screenshots/             screenshots of the review screen, written by the e2e test (dummy data)
-eval/                         ground_truth.csv, run_eval.py -> report.md
+eval/                         ground_truth.csv, run_eval.py -> report.md; name_report.md (git-ignored)
 docs/form_mapping.md          form type mapping table
 docs/edge_cases.md            edge cases actually observed
+docs/handwriting_eval.md      how to collect a handwritten dummy-name set and measure name reading
 scripts/render_previews.py    renders samples/ pages to PNG for manual review
 scripts/make_synthetic_variants.py   6 synthetic distortions of a page (used by the tests)
 scripts/preprocess_examples.py       before/after images -> docs/preprocess_examples/
 scripts/classify_report.py    stage 4 on samples/: type, sender as read, matched sender, score
 scripts/extract_report.py     stage 5 on samples/: fields filled and model calls (counts only)
 scripts/make_sample_output.py docs/sample_output.xlsx from fake-provider dummy data
+scripts/name_eval.py          the current pipeline on a name set -> eval/name_report.md (counts and letters only)
+scripts/make_synthetic_names.py  synthetic name set from a handwriting-style font you pass (sanity check only)
+scripts/name_review_report.py    exported name-review CSVs -> eval/name_review_report.md
 docs/sample_output.xlsx       an example export (dummy data only)
 ```
 
@@ -90,6 +99,9 @@ docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up --build
 
 # evaluation
 .venv/Scripts/python eval/run_eval.py predictions.csv                 # writes eval/report.md
+.venv/Scripts/python scripts/name_eval.py <set_dir>                    # name reading -> eval/name_report.md (docs/handwriting_eval.md)
+.venv/Scripts/python scripts/make_synthetic_names.py <out_dir> --font <ttf> [--template]   # synthetic name set
+.venv/Scripts/python scripts/name_review_report.py <job.csv> [...] [--out FILE]   # exported name reviews -> eval/name_review_report.md
 ```
 
 ### Trying it (Phase 8)
@@ -104,6 +116,7 @@ docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up --build
 |---|---|---|
 | POST | `/jobs` | multipart `files`, repeated once per file (1 to `CE_MAX_FILES`; PDF, PNG, JPEG, TIFF or WEBP — detected from the content, each up to `CE_MAX_UPLOAD_MB`); one job over all of them, read in the order sent. 413 too large / too many files, 415 unsupported type (nothing is stored if any file is refused); returns the job, processing runs in the background |
 | GET | `/senders` | the canonical sender names (sorted), for the reviewer's sender field |
+| GET | `/review-levels` | JSON `glance_min_confidence`, `verify_below_confidence`, `must_verify_reasons` (reason codes, sorted), `show_confidence_percent`: what the side panel needs to derive a field's review level (see 149) |
 | GET | `/jobs/{id}` | job status and extracted groups (while running: all groups found so far, `finished` marks the read ones) |
 | GET | `/jobs/{id}/events` | `text/event-stream`: `progress` (`status`, `forms_total`, `forms_done`), `rows` (newly finished groups, each once), `end` (the whole job, then the stream closes), `missing` (job gone); 404 if unknown |
 | POST | `/jobs/{id}/export` | the xlsx file (409 if the job is not `done`) |
@@ -111,6 +124,7 @@ docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up --build
 | GET | `/jobs/{id}/lab-match` | **demo only** (dummy lab data): the job's commitments checked against the samples the lab system received, by central number only. JSON `matched` (`commitment_id`, `central_number`, `sample`, `date_differs`), `samples_without_commitment`, `commitments_without_sample` (`central_number` null when none was read). Read-only, changes no field. 409 if the job is not `done`, 503 `lab system unavailable` |
 | GET | `/jobs/{id}/crop/{cid}/{field}` | PNG of the field's box (`?item=n` for list fields), cut on request, never written to disk. 404 with `detail`: `image_gone` (the page image was deleted: file TTL or server restart), `no_box`, `field_not_found` |
 | GET | `/jobs/{id}/pages/{cid}/{page}` | JPEG of one page of the form (`page` 0-based in the source file, one of `FormGroup.pages`), at the resolution of `Field.bbox`. 404 `page_not_in_form` / `image_gone` |
+| GET | `/jobs/{id}/name-review.csv` | the reviewers' work on first / last names as CSV, **no names**: one row per name a reviewer saved — the source, reasons, score and review flag before the first correction, whether the reading was right, edit distance, written length and the single letters substituted / dropped / added (see 156). 409 if the job is not `done` |
 | DELETE | `/jobs/{id}` | deletes the job's rows in every table and its files (upload, page images, export) |
 
 Every endpoint under `/jobs/{id}` is 404 `job not found` for an unknown, deleted or expired job, and those with `{cid}` are 404 `commitment not found` for an unknown form.
@@ -131,7 +145,7 @@ With `CE_DEMO_ACCESS_TOKEN` set, every endpoint but `/health` answers 401 `acces
 | `CE_LOCAL_VLM_URL` | `http://localhost:11434` | Ollama server for `local_vlm` |
 | `CE_LOCAL_VLM_MODEL` | `qwen2.5vl:7b` | any vision model pulled on that server |
 | `CE_LOCAL_VLM_TIMEOUT_S` | `300` | per call |
-| `CE_PROMPT_VERSION` | `v1` | picks `backend/prompts/extract_<v>.md` and `read_number_<v>.md` |
+| `CE_PROMPT_VERSION` | `v1` | picks `backend/prompts/extract_<v>.md`, `read_number_<v>.md`, `read_name_<v>.md` and `read_name_letters_<v>.md` |
 | `CE_PROMPTS_DIR` | `backend/prompts` | |
 | `CE_EXTRACT_CONCURRENCY` | `4` | provider calls in flight at once while reading the forms of a job |
 | `CE_EXTRACT_CALL_TIMEOUT_S` | `240` | per call, around the provider's own HTTP timeout |
@@ -202,11 +216,17 @@ With `CE_DEMO_ACCESS_TOKEN` set, every endpoint but `/health` answers 401 `acces
 | `CE_CONFIDENCE_SECOND_READING_AGREEMENT` | `0.15` | added when the second reading agrees |
 | `CE_CONFIDENCE_OCR_DISAGREEMENT` | `0.3` | subtracted when OCR disagrees |
 | `CE_CONFIDENCE_SECOND_READING_DISAGREEMENT` | `0.3` | subtracted when the second reading disagrees |
+| `CE_CONFIDENCE_ADDITIONAL_READING_AGREEMENT` | `0.05` | name second look only: added per agreeing reading beyond the first, when every extra reading agrees (see 141) |
 | `CE_CONFIDENCE_HARD_FAIL` | `0.3` | subtracted per failed hard rule |
 | `CE_CONFIDENCE_SOFT_FAIL` | `0.1` | subtracted per failed soft rule |
 | `CE_CONFIDENCE_ILLEGIBLE` | `0.2` | subtracted when the value is not fully legible |
 | `CE_CONFIDENCE_REVIEW_THRESHOLD` | `0.9` | a field below this is flagged; **a temporary default, not calibrated** |
+| `CE_REVIEW_LEVEL_GLANCE_MIN` | `0.9` | review level in the side panel (see 149): at or above this score, and not flagged → "quick glance"; **not calibrated** |
+| `CE_REVIEW_LEVEL_VERIFY_BELOW` | `0.5` | below this score → "must verify"; must not exceed `CE_REVIEW_LEVEL_GLANCE_MIN` |
+| `CE_SHOW_CONFIDENCE_PERCENT` | `0` | `1`: also show the raw score as a percentage, labelled uncalibrated (see 151) |
 | `CE_EXPORT_COLUMNS` | `first_name,last_name,id_number,central_numbers,received_date,sender,commitment_numbers,review_notes,source_file` | Excel columns, in order (Phase 9, see 84); any subset of these keys plus `pages` |
+| `CE_NAME_REREAD` | `0` | `1`: extra readings of names, handwritten and printed (stage 5d, see 135–144); Claude (or `fake`) only |
+| `CE_NAME_REREAD_VARIANTS` | `wide,letters` | 1–3 of `wide`, `narrow`, `ink`, `letters`, comma-separated: one extra call per name each |
 | `CE_EXPORT_MULTI_VALUES` | `joined` | `joined`: several central / commitment numbers in one cell, separated by `; `; `columns`: one column per number |
 
 ## Assumptions (Phase 1)
@@ -441,6 +461,101 @@ With `CE_DEMO_ACCESS_TOKEN` set, every endpoint but `/health` answers 401 `acces
 - Settings: new `ExportSettings` at `Settings.export` (`CE_EXPORT_COLUMNS`, `CE_EXPORT_MULTI_VALUES`), `MultiValueMode`, `EXPORT_COLUMN_KEYS`, `DEFAULT_EXPORT_COLUMNS`.
 - `pipeline/reason_texts.py`: new `FORM_REASON_TEXTS`.
 
+## Assumptions (handwritten names, step 1 — name evaluation, no behaviour change)
+128. **What was verified in the code before this step.** Names are read once, inside the full-page `extract_form` call: the page is downscaled to `CE_VLM_MAX_EDGE_PX` (2000 px) in preprocess and capped again at 2000 px by `common.encode_image`, JPEG quality 85; `classify` does not read names. `ocr_check` and `reread` only cover `crops.numeric_fields` (ID, central and commitment numbers), so names get no OCR check and no second look, and `normalize_name` has no rules. A name's score is therefore its base: 0.55 handwritten (0.35 when also `illegible`) — and **0.8 when the model says it is printed** — so with the 0.9 threshold **every name with a value is flagged**, printed ones too. `claude.py` does not mention `temperature` (it never sends one; only `local_vlm.py` sets `temperature=0`); diversity between readings must still come from different inputs or prompts.
+129. **A name set is a folder** (`app/evaluation/name_set.py`): whole dummy pages (any type `ingest` accepts) plus `labels.csv` (`image,first_name,last_name,kind`, UTF-8 with or without BOM, `kind` = `synthetic` | `handwritten`, extra columns ignored, an empty name cell = the field is blank on the page). Image paths must stay inside the folder and be unique. Errors name the row number only.
+130. **Each page is its own job** through the real `Orchestrator` (`scripts/name_eval.py`), with the configured provider and OCR, so the run measures the current pipeline as deployed (preprocess and segmentation included). Of a page split into several forms, the first form read without error is scored; a page whose job fails counts as two empty, flagged fields and its exception type is listed.
+131. **Comparison levels** (`app/hebrew_text.py`, for comparing only, never stored): `comparable_name` = NFKD, combining marks (niqqud, cantillation) and format characters (bidi marks) removed, quote marks removed (ASCII, geresh, gershayim, typographic), whitespace collapsed and trimmed, final letters unified. Exact match and CER use it. "Exact, finals as written" and the **confusion table** use `strip_marks` (the same without unifying final letters), because the watched pairs ו/ן and ס/ם would otherwise disappear into ו/נ and ס/מ. Maqaf and hyphen are kept as written.
+132. **CER** = summed Levenshtein distance / summed length of the written names (characters, spaces included), per kind and field. An empty reading counts as all-deleted in CER and as "left empty", and is left out of the confusion table. The confusion table uses one optimal alignment per pair (`rapidfuzz` `Levenshtein.editops`); among equally short alignments it picks one.
+133. **The report holds counts, rates and single letters only** — never a name, file name or note; synthetic pages are reported apart, with a sanity-check notice whenever there are any. "Wrong and not flagged" (a wrong name with `needs_review` false) is reported as the key safety count.
+134. **Synthetic pages** (`scripts/make_synthetic_names.py`): an A4 dummy form at 150 DPI drawn with Pillow from a font path given on the command line (none bundled); names from built-in dummy lists, each with random size, slant, position and ink colour; the page turned up to ±2°, maybe blurred, noise added, saved as JPEG at quality 60–92. Pillow here has no `raqm`, so Hebrew is reversed for display (pure Hebrew strings only; digits are drawn as they are). `--template` writes the blank form as `template.pdf` for handwritten collection.
+
+### Handwritten names step 1 — what was checked
+- New tests: `test_hebrew_text.py` (folding), `test_name_set.py` (format, every refusal, no names in errors), `test_name_metrics.py` (exact / strict / CER / empty / flagged / wrong-not-flagged arithmetic, confusions keep final letters, the form chosen from a job), `test_name_report.py` (no names or file names in the report, rows, watched groups, sanity notice), `test_name_eval.py` (the script on a 3-page dummy set with `FakeProvider` and no OCR: set order kept with 2 workers, a broken page does not stop the run, no names in the report), `test_make_synthetic_names.py` (with Pillow's built-in font: set written and loadable, reproducible by seed, ink in the name cells, template PDF).
+- Both scripts were run from the command line on a 4-page synthetic set (Windows Arial for rendering, `CE_PROVIDER=fake`, no Tesseract): the set loads, every page gives one form, the report is written; one page was looked at (labels and names right-to-left, coloured ink, slant).
+
+### Handwritten names step 1 — what does not work / was not checked
+- **No accuracy has been measured**: there is no handwritten set yet, and the scripts were not run with Claude (no key here). FakeProvider answers fixed names, so its run shows 0% exact by construction.
+- Not checked with a real handwriting-style font, or on Linux.
+- A multi-page dummy form is scored on its first form only.
+
+### Handwritten names step 1 changes to existing interfaces
+- None to existing modules or settings; no new `CE_*` setting. New: `app/hebrew_text.py`, `app/evaluation/` (`name_set`, `name_metrics`, `name_report`), `scripts/name_eval.py`, `scripts/make_synthetic_names.py`, `docs/handwriting_eval.md`. `.gitignore`: `eval/name_report.md`, `eval/name_sets/`.
+
+## Assumptions (handwritten names, step 2 — focused name reading, opt-in)
+135. **Off by default** (`CE_NAME_REREAD=0`): nothing changes until the name evaluation (`scripts/name_eval.py`) shows it helps. When on, a new stage 5d (`pipeline/reread_name.py`) runs after the number second look and before normalization. `Settings` refuses it with a provider other than `claude` (or `fake`): Gemini and `local_vlm` raise `ProviderError` from `read_name`; no provider was added.
+136. *(Printed names: superseded by 143.)* **Which names:** a handwritten value, or an empty one the model saw something of (a box, `illegible` or `bbox_implausible`). Printed names are not looked at again and keep their 0.8 (see 128).
+137. **Diversity comes from inputs and prompts, never sampling** (no `temperature` is sent). `CE_NAME_REREAD_VARIANTS` lists 1–3 of: `wide` (box + 1.5 box heights left/right, 0.6 up/down; at least the numbers' 10 px), `narrow` (0.4 / 0.25 heights), `ink` (wide, then `imaging/ink.py`), `letters` (wide, with the letter-by-letter prompt). Default `wide,letters`: with the extract-call reading, 3 readings per name, at most 4 extra calls per form (2 names × 2); the bound is 3 variants (6 calls per form). Padding is relative to the box height because handwriting size scales with it, not with the DPI. Crops come from the full-resolution colour `original` (never binarized) and are enlarged like the number second look (2.5×, capped at 1600 px). All name readings of a form run concurrently through `ProviderCalls`.
+138. **Fallback without a usable box:** the other name's box grown by its own width to each side and two heights up and down (first and last name sit side by side or one above the other); the prompt names the field to read. Reason `name_reread_fallback_box`. With neither box: `name_reread_unavailable` — never skipped silently.
+139. **Prompts** `read_name_v1.md` and `read_name_letters_v1.md` (new files of the v1 set; no released file was edited): the image is a Hebrew handwritten name (`{{field}}` names which one, with its usual label), lists the confusions ד/ר, ו/ן/ז/ג, ה/ח/ת, כ/ב, ס/ם/ט, ע/צ and final/regular forms, forbids completing or correcting, allows an empty answer (null), asks for up to 3 ranked candidates with uncertain letters in square brackets. `common.name_from_output` drops blank and repeated candidates, keeps 3, and turns the brackets into 0-based positions; a marking that is not the value with brackets added is not trusted (no positions).
+140. *(Empty names: superseded by 144.)* **Signals, never overwrites.** Every answer is a `reread` `FieldSignal` with the new `variant`, `candidates` and `uncertain`; the value is never changed, also not when it is empty and a reading found a name. Compared with `hebrew_text.comparable_name` (final letters, quotes, niqqud, spacing): `name_readings_agree` (every extra reading answered and its first candidate is the value — a strict rule: one null or failed reading means no agreement), `name_readings_disagree`, `name_reread_null`, `name_reread_found_value`, `name_uncertain_letters` (letters marked uncertain in an agreeing first candidate), `name_reread_failed`. Hebrew texts in `reason_texts.py`.
+141. *(Printed names: see 143.)* **Scoring.** `name_readings_agree` / `_disagree` join the existing second-reading sets (+0.15 / −0.3), `name_uncertain_letters` is a soft fail (−0.1), and the new `FieldSignals.additional_agreements` (agreeing readings beyond the first) adds `CE_CONFIDENCE_ADDITIONAL_READING_AGREEMENT` each, **default 0.05**. No existing weight was changed. A handwritten name therefore tops out at 0.55 + 0.15 + 0.05 = **0.75** with the default 2 variants and **0.80** with 3 — always below 0.9, always reviewed. It would reach the threshold with 3 agreeing variants at a weight of 0.10, or with 2 at 0.20 (an untested choice; see "what was not checked"). The same model reading the same strokes can repeat the same mistake, so agreement is weaker evidence than OCR agreeing with a model.
+142. **Ink separation** (`imaging/ink.py`, used only by the `ink` variant): adaptive threshold → ruled lines and box edges removed by morphological opening (horizontal runs over 35% of the width, vertical over 60% of the height) → if at least 25% of the remaining ink is coloured (HSV saturation ≥ 60), only coloured ink is kept (printed text is black). Black handwriting is kept together with the print. Strokes lying on a ruled line lose the covered part.
+
+143. **Printed names are read again too** (on request): every name with a value gets the extra readings, whatever its `source`; the prompts now say the name is "usually by hand, sometimes printed, typed or on a sticker" (the two `read_name` files were changed before they were ever committed, so no released version was edited). With the default weights a **printed** name whose extra readings all agree **passes review**: 0.8 + 0.15 = 0.95 with one variant, 1.0 (clipped) with the default two — the same rule the number second look already applies to printed numbers (0.8 + 0.15). A disagreement gives 0.5 (reviewed).
+144. **Something is always shown** (on request). A value that was read is never removed or overwritten; a failed, empty or disagreeing extra reading only withholds the confidence bonus. When the extract call read **no** name but an extra reading did, the first candidate found (in variant order) becomes `value` and `raw_value`, with `name_filled_from_second_look` (Hebrew text "מוצג מקריאה נוספת, בביטחון נמוך"): scored as handwritten (how it was written is unknown), a soft fail (−0.1, so 0.45), never counted as agreement, and **always reviewed** whatever the weights (like `illegible`). Other readings that differ from it add `name_readings_disagree` (0.15). All candidates stay in the signals. A name that no reading found stays empty and flagged (`not_found`). This replaces `name_reread_found_value`.
+
+### Handwritten names step 2 — what was checked
+- Tests: `test_reread_name.py` (targets, every outcome code, crop size and colour, the narrow variant smaller, fallback box, implausible box → unavailable, failure, found value not filled in, 2 names × 3 variants = 6 calls, the ink crop loses the black line and keeps the blue ink), `test_ink.py`, `test_confidence.py` (the score arithmetic above for every signal combination, and 0.9 reached only with a weight of 0.10 and 3 agreeing readings), `test_read_form.py` (off by default: 2 calls, nothing new; on: 4 calls, agreement recorded, 0.75 and still reviewed), prompts, `common` parsing and bracket positions, Claude request (one crop, the prompt for the field and wording, closed schema, no `temperature`), fake provider, Gemini/local refusal, settings (defaults, env, invalid lists, provider check), crops padding, name evaluation (configuration line, agreement/candidate table).
+- Ink separation was looked at on a synthetic page (blue name in a ruled cell): lines and paper noise gone, the name kept.
+- The name report gets a "Name second look" table when it ran: exact / wrong per agreement outcome, and how often a wrong name had the right one among the candidates.
+
+### Handwritten names step 2 — what does not work / was not checked
+- **No effect has been measured**: no handwritten set exists yet and Claude was not called (no key here). Whether agreement predicts a right name, which variants help and whether ink separation helps are open until the step 1 set is run with the feature off and on.
+- The padding factors, fallback region and ink thresholds are hand-chosen.
+- `candidates` are stored but not shown in the UI yet (step 4).
+
+### Handwritten names step 2 changes to existing interfaces
+- `ExtractionProvider.read_name(crop, field_name, wording) -> NameReading` (new protocol method; Claude implements it, Gemini and `local_vlm` raise `ProviderError`). `FakeProvider(names=...)`, `FakeProvider.name_requests`.
+- Schema: new `NameWording`, `NameCandidate`, `NameReading`; `FieldSignal.variant`, `.candidates`, `.uncertain` (optional, inside `data_json`: no migration).
+- `common.NAME_SCHEMA`, `name_from_output`, `uncertain_positions`, `MAX_NAME_CANDIDATES`. `Prompts.read_name(field_name, wording)` and `read_name_templates`; `Prompts.load` now needs `read_name_<v>.md` and `read_name_letters_<v>.md` too.
+- `crops.crop_field` / `crop_bbox`: optional `padding_px` (default `CROP_PADDING_PX`, as before).
+- `FormReader(..., name_reread=None)`; `Orchestrator` passes `settings.name_reread`.
+- `confidence`: `FieldSignals.additional_agreements` (also a new feature column for a fitted model); new codes in `SECOND_READING_AGREES` / `_DISAGREES` and `SOFT_FAIL_REASONS`.
+- Settings: `NameRereadSettings` at `Settings.name_reread`, `NameVariant`, `MAX_NAME_VARIANTS`, `ConfidenceSettings.additional_reading_agreement` (table above).
+- Name evaluation: `FieldOutcome.candidates`, `.agreement`, `.truth_in_candidates`; the configuration line has `name_reread`.
+- After review (143, 144): `needs_name_look` covers printed names; `NAME_REREAD_FOUND_VALUE` → `NAME_FILLED_FROM_SECOND_LOOK`; `FieldSignals.filled_by_second_look` (a feature column, forces review).
+
+## Assumptions (handwritten names, step 3 — name list as a soft hint, deferred)
+*(Not wired, on request: the module `pipeline/name_hint.py` and its tests are kept, but the pipeline, the settings `CE_NAME_LIST_FIRST_PATH` / `CE_NAME_LIST_LAST_PATH` and the name report's "Name list hint" table were taken out again in step 4; 145–148 describe the module as it would run once wired.)*
+145. **No list is bundled.** The hint runs only when `CE_NAME_LIST_FIRST_PATH` and/or `CE_NAME_LIST_LAST_PATH` point to a list (UTF-8, BOM allowed, one name per line, `#` comments, repeats and blank lines dropped); each list is used for its own field only. A missing, non-UTF-8 or empty file stops the start-up (`NameListError`, file name only). The source and licence of a list are the operator's decision (see "what was not done").
+146. **Stage 6b** (`pipeline/name_hint.py`) runs after normalization, before confidence, on every name with a value — read by the extract call or filled by the name second look (144). Compared with `comparable_name`. Listed → `name_in_list`. Not listed but listed names at Levenshtein distance exactly 1 (`rapidfuzz.process.extract`) → `name_list_suggestion` and a `name_list` `FieldSignal` with up to 3 of them in list order as `candidates` (lists sorted by frequency give the most common first). Distance 2 or more → nothing.
+147. **A suggestion, never a correction, and never a score change.** The value is not replaced; neither code is a confidence signal, so a name that is in no list (rare names, foreign spellings) scores exactly as one that is. Any later weight would need the step 1 evidence ("Name list hint" table in the name report: a suggestion on a right read misleads the reviewer).
+148. Measured cost: building a 50,000-name list 0.1 s at start-up, about 3 ms per name looked up (random dummy names, this machine).
+
+### Handwritten names step 3 — what was checked
+- `test_name_hint.py`: listed (also with a final letter or quote written differently) → information only; one letter away → suggested, value unchanged; list order and the cap of 3; unlisted names get nothing; listed / suggested / unlisted names get the same score; each list for its own field; empty names skipped; loading (comments, blanks, repeats, BOM) and refusals. `test_read_form.py` (runs after normalization: the trimmed value is matched, the value kept), `test_config.py`, `test_reason_texts.py`, name evaluation (the "Name list hint" table, the configuration line names which lists are on, never their paths).
+
+### Handwritten names step 3 — what does not work / was not checked / was not done
+- **No list was chosen or downloaded** (as asked). Candidates found: the Population and Immigration Authority dataset "שמות פרטיים בישראל" on data.gov.il, whose site terms grant a worldwide, royalty-free, non-exclusive licence unless the dataset carries its own; the dataset's own licence field could not be read here (certificate error on this machine), and no surname dataset was confirmed. To be checked before use.
+- No effect measured (no handwritten set yet). Distance 1 only; no weighting by name frequency.
+
+### Handwritten names step 3 changes to existing interfaces
+- New `pipeline/name_hint.py` (`NameList`, `NameLists`, `load_name_list`, `hint_names`, `NameListError`); `SignalSource.NAME_LIST`; `FormReader(..., name_lists=None)`; `Orchestrator` loads the lists from the settings (and fails at start-up on a bad file).
+- Settings: `Settings.name_list_first_path`, `.name_list_last_path` (`CE_NAME_LIST_FIRST_PATH`, `CE_NAME_LIST_LAST_PATH`).
+- Name evaluation: `FieldOutcome.list_suggestions`, `.in_list`, `.truth_in_list_suggestions`; configuration line `name_lists`.
+
+## Assumptions (handwritten names, step 4 — reviewer experience and data capture)
+153. **The name crop is wider and sits beside the value.** For first and last names `GET /jobs/{id}/crop/...` cuts the same widened region as the name second look's `wide` variant (`reread_name.wide_name_box`: 1.5 name heights each side, 0.6 above and below), so a letter cut off by a tight box is visible; other fields are cut as before. In the side panel the crop of a name comes right after the input (before the review level); other fields keep their order.
+154. **Candidates as one-click choices.** The panel lists the name second look's readings that differ from the value (`review.nameCandidates`: every `value` and `candidates` of the signals with a `variant`, ranked by how many readings give them, then first seen; at most 4). A click saves that name through the usual `PATCH` (a manual correction, `source=manual`), exactly as typing it and pressing Enter. No candidates while the job runs, and none without the name second look (`CE_NAME_REREAD=0`: no such signals). Name-list suggestions (step 3, unwired) are not offered.
+155. **Corrections remember what the pipeline thought.** `Correction` now also keeps `previous_reasons`, `previous_confidence` and `previous_needs_review` (optional, in `data_json`: no migration; older jobs read as empty / `None`).
+156. **A name-accuracy set from review work, without names** (`app/evaluation/name_review.py`, `GET /jobs/{id}/name-review.csv`). A record is made for every first / last name whose final value was saved by a reviewer — also one approved unchanged, which is a "right" record. It compares the reading before the **first** correction (`previous_raw_value`) with the final value, with the same folding as the step 1 metrics (right after `comparable_name`, and with final letters as written). It keeps only: field, previous source, second look agreement (from the previous reasons), previous review flag and score, read empty, right / right strict, edit distance, written length, and the single letters substituted, dropped or added (a space as `␣`). The CSV can be kept after the job expires; `scripts/name_review_report.py` sums many into `eval/name_review_report.md` (git-ignored): the step 1 tables per source × agreement, including "wrong and not flagged", and the letter confusions. Rates describe reviewed fields only (a value nobody opened makes no record).
+157. **The letters are not fully anonymous on short names**: a record of a 3-letter name with one substitution reveals one letter of the name and its length. Judged acceptable for files kept inside the lab (no name, form id, file name or job id in the CSV); do not publish them.
+
+### Handwritten names step 4 — what was checked
+- Backend: `test_name_review.py` (records only for names a reviewer saved, the previous state kept, the first correction compared, wrong and not flagged, CSV round trip, no names in CSV or report), `test_name_review_report.py` (two files summed up), `test_corrections.py` (previous reasons / score / flag recorded), `test_field_crops.py` (a name crop is wider than the number crop of the same box), `test_main.py` (the CSV endpoint: 409 while not done, no names in the CSV or the log, behind the access code).
+- Frontend: `review.test.ts` (`nameCandidates`: ranking, current value left out, other signals ignored, cap), `FieldPanel.test.tsx` (the name crop between the input and the review level, one click saves the candidate, no candidates for other fields or while running). `npm test`, `npm run lint` and `npm run build` pass.
+
+### Handwritten names step 4 — what does not work / was not checked
+- No reviewer has used it; the e2e test and screenshots were not rerun (the fake provider gives no name second look signals, so no candidates appear there).
+- No effect measured. The export is per job: collecting the CSVs before jobs expire (`CE_JOB_TTL_S`) is a manual step.
+
+### Handwritten names step 4 changes to existing interfaces
+- `Correction`: new `previous_reasons`, `previous_confidence`, `previous_needs_review`. New endpoint `GET /jobs/{id}/name-review.csv`.
+- `field_crops.field_crop_png`: name fields cut with `reread_name.wide_name_box` (no extra padding).
+- `name_report`: `confusion_section`, `rate`, `letter` are public (used by `name_review`). The "Name list hint" table and the name-list settings of step 3 were removed (step 3 deferred).
+- Frontend: `api.FieldSignal`, `Field.signals`; `review.ts`: `NAME_FIELDS`, `isNameField`, `nameCandidates`, `MAX_NAME_CHOICES`; `FieldPanel`'s `save` takes an optional value.
+
 ## Assumptions (deployment fixes — sync report)
 71. *(Default superseded by 90.)* **Jobs are kept in memory by default** (`CE_STORAGE=memory`), because the deployment guidelines allow no persistent state on disk and Render's disk is ephemeral anyway. `sqlite` stays for local use only; `docker-compose.yml` no longer mounts the `job-db` volume, and `docker-compose.sqlite.yml` adds it back on request. Supersedes 24.
 72. **The container listens on `0.0.0.0:${PORT:-8000}`** (`backend/Dockerfile`), so Render can assign the port. `PORT` is the only variable read without the `CE_` prefix; the `CE_` prefix on all other settings is deliberate (`CE_TMP_DIR`, `CE_TESSERACT_CMD`, `CE_ALLOWED_ORIGINS`, ...).
@@ -568,6 +683,22 @@ With `CE_DEMO_ACCESS_TOKEN` set, every endpoint but `/health` answers 401 `acces
 - `illumination.FLOAT_STRIP_ROWS`, `LIGHTNESS_CHANNEL`.
 - API: 413 `file exceeds the memory budget`. Frontend: `messages.jobErrorText(error)`; the failed-job status shows it.
 - New `scripts/measure_memory.py`; `psutil` declared in the `dev` extra (already pinned in the lock file).
+
+## Assumptions (review level in the side panel)
+149. **Three review levels, not accuracy.** Next to the approve action (Enter) the side panel shows how much checking a value needs: "מבט מהיר" (quick glance), "לבדוק בעיון" (check carefully) or "חובה לאמת" (must verify), as text with an icon (the colour only repeats them), followed by the field's `explanations`. The level is derived in `frontend/src/review.ts` (`reviewLevel`): a manual correction has no level; an empty value is "must verify" when flagged and "quick glance" when optional; a value with a code in `confidence.MUST_VERIFY_REASONS` or a score below `CE_REVIEW_LEVEL_VERIFY_BELOW` is "must verify"; a value flagged by the confidence stage or scoring below `CE_REVIEW_LEVEL_GLANCE_MIN` is "check carefully"; the rest is "quick glance". So "quick glance" never covers a field that `needs_review`.
+150. **Must-verify signals:** every hard rule failure, any disagreeing independent reading (OCR, second look, the sender's two readings, the name second look), `illegible`, and `name_filled_from_second_look`. Soft signals alone (`id_checksum_failed`, `single_reading`, `handwritten`) only lower the score. With the default weights a handwritten value read once (0.55) is "check carefully", the same with one soft failure (0.45) "must verify", and a printed number that OCR confirms (1.0) "quick glance". Thresholds hand-chosen like the weights; to be calibrated with them.
+151. **The score is not shown by default**, because it is not a probability of being right. With `CE_SHOW_CONFIDENCE_PERCENT=1` it appears as "ציון ביטחון (לא מכויל, אינו סיכוי לדיוק)", never as accuracy.
+152. **Per form counts** in the panel: the entries of the open form (each central / commitment number on its own, an empty list as one) per level, plus those corrected by hand. Without `/review-levels` (request failed) the panel shows the reasons and no level.
+
+### Review level — what was checked
+- Backend: settings defaults, env and ordering validation; the endpoint (also behind the access code); the must-verify set covers hard fails, disagreements and `illegible`, and no soft signal alone. Frontend (Vitest): every level boundary, must-verify codes, empty and optional values, manual corrections, per-form counts, the percentage only behind its setting; the panel renders text + icon, the counts, the LTR-isolated percentage, and the fallback without thresholds. RTL layout checked on the e2e screenshot (`docs/screenshots/side_panel.png`).
+
+### Review level — what was not checked
+- The thresholds against real outcomes: there is no ground truth yet, so how often a "quick glance" value is wrong is unknown.
+
+### Review level changes to existing interfaces
+- `Settings`: new `review_levels` (`ReviewLevelSettings`). `confidence`: new `MUST_VERIFY_REASONS`. New `app/review_levels.py` (`ReviewLevelConfig`, `review_level_config`) and `GET /review-levels`.
+- Frontend: `api.ReviewLevelConfig`, `getReviewLevels`; `review.ts`: `ReviewLevel`, `REVIEW_LEVELS`, `REVIEW_LEVEL_ORDER`, `reviewLevel`, `levelCounts`, `confidencePercent`; `FieldPanel` takes `reviewLevels` and shows the reasons inside the review level section; `Icon`: `eye`, `search`, `alert`.
 
 ## Storage
 - **Interface:** `app/storage/base.py` defines the `JobStore` Protocol (`init`, `close`, `create`, `get`, `update`, `delete`, `list_commitments`, `fail_interrupted`, `purge_expired`); `create_job_store(settings, tmp)` builds `PostgresJobStore` (`storage/postgres.py`), `SqliteJobStore` (`storage/sqlite.py`) or `MemoryJobStore` (`storage/memory.py`). Both SQL stores share all queries (`storage/sql.py`); they differ only in the connection (SQLite: one per operation; Postgres: a `psycopg_pool` pool) and the migration lock.

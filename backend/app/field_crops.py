@@ -9,6 +9,7 @@ import cv2
 
 from app.corrections import field_at
 from app.pipeline.crops import crop_bbox
+from app.pipeline.reread_name import NAME_FIELDS, wide_name_box
 from app.schemas import FormGroup
 from app.storage.page_images import PageImageStore
 
@@ -27,7 +28,8 @@ IMAGE_GONE = "image_gone"
 
 
 def field_crop_png(images: PageImageStore, job_id: str, group: FormGroup, name: str, item: int | None) -> bytes:
-    """The PNG of the field's box (plus the usual padding) on its page."""
+    """The PNG of the field's box on its page: plus the usual padding, or for a
+    name the wide padding of the name second look (the whole name and its row)."""
     field = field_at(group, name, item)
     if field is None:
         raise CropUnavailableError(FIELD_NOT_FOUND)
@@ -36,7 +38,8 @@ def field_crop_png(images: PageImageStore, job_id: str, group: FormGroup, name: 
     page = images.load(job_id, group.source_file, field.bbox.page)
     if page is None:
         raise CropUnavailableError(IMAGE_GONE)
-    crop = crop_bbox(page, field.bbox)
+    crop = crop_bbox(page, wide_name_box(field.bbox), padding_px=0) if name in NAME_FIELDS \
+        else crop_bbox(page, field.bbox)
     if crop is None:
         raise CropUnavailableError(NO_BOX)
     ok, encoded = cv2.imencode(PNG_SUFFIX, crop)

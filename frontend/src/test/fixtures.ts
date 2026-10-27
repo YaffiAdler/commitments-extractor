@@ -11,6 +11,7 @@ export function field(value: string | null, review = false, extra: Partial<Field
     explanations: review ? ['נקרא פעם אחת בלבד'] : [],
     source: value === null ? 'none' : 'printed',
     bbox: null,
+    signals: [],
     ...extra,
   }
 }

@@ -2,7 +2,7 @@ import numpy as np
 
 from app.providers import fake
 from app.providers.fake import FakeProvider
-from app.schemas import UNKNOWN_FORM_TYPE, FieldReading, FormReading
+from app.schemas import UNKNOWN_FORM_TYPE, FieldReading, FormReading, NameCandidate, NameReading, NameWording
 
 
 def test_extract_form_returns_dummy_values():
@@ -34,3 +34,12 @@ def test_classify():
 def test_compare_pages_says_every_page_starts_a_form():
     relation = FakeProvider().compare_pages(None, None)
     assert (relation.same_form, relation.page_b_type) == (False, "start")
+
+
+def test_read_name_answers_in_order_records_requests_then_null():
+    answer = NameReading(candidates=[NameCandidate(value="משה")])
+    provider = FakeProvider(names=[answer])
+    crop = np.zeros((10, 10, 3), np.uint8)
+    assert provider.read_name(crop, "first_name", NameWording.STANDARD).top.value == "משה"
+    assert provider.read_name(crop, "last_name", NameWording.LETTERS).top is None
+    assert provider.name_requests == [("first_name", NameWording.STANDARD), ("last_name", NameWording.LETTERS)]

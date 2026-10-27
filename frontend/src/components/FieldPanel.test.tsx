@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
@@ -13,6 +13,12 @@ vi.mock('../api', async (importOriginal) => ({
   getPage: vi.fn(),
 }))
 
+const LEVELS: api.ReviewLevelConfig = {
+  glance_min_confidence: 0.9,
+  verify_below_confidence: 0.5,
+  must_verify_reasons: ['ocr_disagrees'],
+  show_confidence_percent: false,
+}
 const BOX = { page: 0, x0: 100, y0: 50, x1: 300, y1: 90 }
 const g = group({
   commitment: commitment({
@@ -24,6 +30,14 @@ const g = group({
     received_date: field(null),
   }),
 })
+const NAME_SIGNALS: api.FieldSignal[] = [
+  { source: 'reread', value: 'דוד', variant: 'wide', candidates: ['דוד', 'רוד'], uncertain: [0] },
+  { source: 'reread', value: 'רוד', variant: 'letters', candidates: ['רוד'], uncertain: [] },
+]
+const named = group({
+  commitment: commitment({ first_name: field('רוד', true, { source: 'handwritten', bbox: BOX, signals: NAME_SIGNALS }) }),
+})
+const NAME: FieldTarget = { groupId: named.id, field: 'first_name', item: null }
 const ID: FieldTarget = { groupId: g.id, field: 'id_number', item: null }
 const DATE: FieldTarget = { groupId: g.id, field: 'received_date', item: null }
 
@@ -33,6 +47,7 @@ function renderPanel(target: FieldTarget, overrides: Partial<Parameters<typeof F
     group: g,
     target,
     senders: ['כללית', 'מכבי'],
+    reviewLevels: LEVELS,
     onSaved: vi.fn(),
     onNavigate: vi.fn(),
     onClose: vi.fn(),
@@ -56,6 +71,39 @@ describe('FieldPanel', () => {
     expect(await screen.findByAltText('עמוד 1 של הטופס')).toBeTruthy()
     expect(api.getCrop).toHaveBeenCalledWith('j1', g.id, 'id_number', null)
     expect(api.getPage).toHaveBeenCalledWith('j1', g.id, 0)
+  })
+
+  it('shows the review level with text and icon, its reasons, and the form counts', () => {
+    renderPanel(ID)
+    const guide = screen.getByRole('region', { name: 'רמת בדיקה לפני אישור' })
+    const badge = within(guide).getByText('חובה לאמת')
+    expect(badge.className).toContain('level-badge verify')
+    expect(badge.querySelector('svg')).toBeTruthy()
+    expect(within(guide).getByText('נקרא פעם אחת בלבד')).toBeTruthy()
+    expect(guide.textContent).not.toContain('%')
+    // id_number (score 0.4) and the empty date: verify; the other five fields: glance.
+    const counts = screen.getByRole('list', { name: 'שדות בטופס לפי רמת בדיקה' })
+    expect(within(counts).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'חובה לאמת 2',
+      'לבדוק בעיון 0',
+      'מבט מהיר 5',
+      'תוקנו ידנית 0',
+    ])
+  })
+
+  it('shows the uncalibrated score left-to-right only when the setting allows it', () => {
+    renderPanel(ID, { reviewLevels: { ...LEVELS, show_confidence_percent: true } })
+    const score = screen.getByText('40%')
+    expect(score.tagName).toBe('BDI')
+    expect(score.getAttribute('dir')).toBe('ltr')
+    expect(score.parentElement?.textContent).toContain('לא מכויל')
+  })
+
+  it('keeps the reasons but shows no level without the thresholds', () => {
+    renderPanel(ID, { reviewLevels: null })
+    expect(screen.getByText('רמת הבדיקה אינה זמינה כרגע')).toBeTruthy()
+    expect(screen.getByText('ספרת הביקורת אינה תקינה')).toBeTruthy()
+    expect(screen.queryByRole('list', { name: 'שדות בטופס לפי רמת בדיקה' })).toBeNull()
   })
 
   it('outlines the field on the full page', async () => {
@@ -148,5 +196,31 @@ describe('FieldPanel', () => {
     renderPanel(ID, { job: job([g], { status: 'running' }) })
     expect((screen.getByRole('textbox', { name: 'ערך' }) as HTMLInputElement).disabled).toBe(true)
     expect(screen.getByText('אפשר לתקן רק אחרי שהעיבוד הסתיים')).toBeTruthy()
+  })
+
+  it('shows a name crop right after the value, and saves a candidate with one click', async () => {
+    vi.mocked(api.correctField).mockResolvedValue(job([named]))
+    const { onSaved } = renderPanel(NAME, { job: job([named]), group: named })
+    const crop = await screen.findByAltText('חיתוך של שם פרטי')
+    const input = screen.getByRole('textbox', { name: 'ערך' })
+    const guide = screen.getByRole('region', { name: 'רמת בדיקה לפני אישור' })
+    expect(input.compareDocumentPosition(crop) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(crop.compareDocumentPosition(guide) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const choices = screen.getByRole('list', { name: 'קריאות אחרות של השם' })
+    expect(within(choices).getAllByRole('button').map((b) => b.textContent)).toEqual(['דוד'])
+    await userEvent.click(within(choices).getByRole('button', { name: 'דוד' }))
+    expect(api.correctField).toHaveBeenCalledWith('j1', named.id, 'first_name', 'דוד', null)
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+  })
+
+  it('offers no candidates for other fields', () => {
+    renderPanel(ID)
+    expect(screen.queryByRole('list', { name: 'קריאות אחרות של השם' })).toBeNull()
+  })
+
+  it('offers no candidates while the job runs', () => {
+    renderPanel(NAME, { job: job([named], { status: 'running' }), group: named })
+    expect(screen.queryByRole('list', { name: 'קריאות אחרות של השם' })).toBeNull()
   })
 })

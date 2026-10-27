@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { type FormGroup, type Job, type JobProgress, deleteJob, exportJob, getJob, getSenders, streamJob, uploadFiles } from './api'
+import {
+  type FormGroup,
+  type Job,
+  type JobProgress,
+  type ReviewLevelConfig,
+  deleteJob,
+  exportJob,
+  getJob,
+  getReviewLevels,
+  getSenders,
+  streamJob,
+  uploadFiles,
+} from './api'
 import { ExportButton } from './components/ExportButton'
 import { FieldPanel } from './components/FieldPanel'
 import { Icon } from './components/Icon'
@@ -49,10 +61,13 @@ function App() {
   const [selected, setSelected] = useState<FieldTarget | null>(null)
   const [onlyUncertain, setOnlyUncertain] = useState(false)
   const [senders, setSenders] = useState<string[]>([])
+  const [reviewLevels, setReviewLevels] = useState<ReviewLevelConfig | null>(null)
 
   useEffect(() => {
     // Without the list the sender field is still editable; the backend checks the name.
     getSenders().then(setSenders, () => setSenders([]))
+    // Without the thresholds the panel shows the reasons but no review level.
+    getReviewLevels().then(setReviewLevels, () => setReviewLevels(null))
   }, [])
 
   // Only forms whose reading finished (polling also returns the unfinished ones), in file and page order.
@@ -269,6 +284,7 @@ function App() {
           group={selectedGroup}
           target={selected}
           senders={senders}
+          reviewLevels={reviewLevels}
           onSaved={handleSaved}
           onNavigate={navigate}
           onClose={closePanel}

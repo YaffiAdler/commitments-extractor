@@ -165,12 +165,14 @@ def test_demo_cors_allows_the_frontend_with_the_token_header(demo_client):
 
 @pytest.mark.parametrize("method, path", [
     ("GET", "/senders"),
+    ("GET", "/review-levels"),
     ("POST", "/jobs"),
     ("GET", "/jobs/{job}"),
     ("GET", "/jobs/{job}/events"),
     ("POST", "/jobs/{job}/export"),
     ("GET", "/jobs/{job}/crop/{group}/id_number"),
     ("GET", "/jobs/{job}/pages/{group}/0"),
+    ("GET", "/jobs/{job}/name-review.csv"),
     ("PATCH", "/jobs/{job}/commitments/{group}/fields/id_number"),
     ("DELETE", "/jobs/{job}"),
 ])
@@ -325,6 +327,7 @@ def test_logs_go_to_stdout(tmp_path):
 # --- Review: manual corrections, field crops, deletion, store errors ----------
 
 DUMMY_ID_NUMBER = "000000026"
+DUMMY_FIRST_NAME = "אהרן"
 BOX = {"page": 0, "x0": 10.0, "y0": 10.0, "x1": 60.0, "y1": 40.0}
 
 
@@ -369,6 +372,18 @@ def test_senders_are_the_canonical_names(client):
     names = client.get("/senders").json()
     assert names == sorted(sender.canonical for sender in load_senders(Settings().senders_path))
     assert fake.FAKE_SENDER in names
+
+
+def test_review_levels_come_from_the_settings(client):
+    from app.pipeline.confidence import MUST_VERIFY_REASONS
+
+    levels = client.get("/review-levels").json()
+    assert levels == {
+        "glance_min_confidence": 0.9,
+        "verify_below_confidence": 0.5,
+        "must_verify_reasons": sorted(MUST_VERIFY_REASONS),
+        "show_confidence_percent": False,
+    }
 
 
 def test_patch_list_item_and_new_item(client):
@@ -419,6 +434,23 @@ def test_patch_unknown_form_or_unfinished_job(client):
     client.app.state.jobs.create(pending)
     assert client.patch(_field_url(pending.id, "0" * 32, "id_number"), json={"value": "1"}).status_code == 409
 
+
+
+def test_name_review_csv_has_no_names(client, caplog):
+    pending = Job()
+    client.app.state.jobs.create(pending)
+    assert client.get(f"/jobs/{pending.id}/name-review.csv").status_code == 409
+
+    job_id = _done_job_id(client)
+    group_id = client.get(f"/jobs/{job_id}").json()["groups"][0]["id"]
+    assert client.patch(_field_url(job_id, group_id, "first_name"), json={"value": DUMMY_FIRST_NAME}).status_code == 200
+    with caplog.at_level(logging.DEBUG):
+        response = client.get(f"/jobs/{job_id}/name-review.csv")
+    assert response.status_code == 200 and response.headers["content-type"].startswith("text/csv")
+    header, row = response.text.strip().splitlines()
+    assert header.startswith("field,") and row.startswith("first_name,")
+    for name in (DUMMY_FIRST_NAME, fake.FAKE_FIRST_NAME):
+        assert name not in response.text and name not in caplog.text
 
 def _with_box(client: TestClient, job_id: str) -> str:
     """Give the ID field a box (the fake provider reads none); return the form id."""
